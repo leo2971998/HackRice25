@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { Home } from "lucide-react"
+import { CreditCard, Home, Settings } from "lucide-react"
 
 type NavLink = {
   label: string
@@ -8,6 +8,10 @@ type NavLink = {
   description?: string
 }
 
-export const NAV_LINKS: NavLink[] = [{ label: "Home", path: "/", icon: Home }]
+export const NAV_LINKS: NavLink[] = [
+  { label: "Home", path: "/", icon: Home },
+  { label: "Cards", path: "/cards", icon: CreditCard },
+  { label: "Settings", path: "/settings", icon: Settings },
+]
 
 export type { NavLink }

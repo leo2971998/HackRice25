@@ -1,9 +1,9 @@
 import { Bar, BarChart as RechartsBarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
-import type { Merchant } from "@/types/api"
+import type { MerchantRow } from "@/types/api"
 
 export type MerchantBarChartProps = {
-  data: Merchant[]
+  data: MerchantRow[]
 }
 
 export function MerchantBarChart({ data }: MerchantBarChartProps) {
