@@ -375,6 +375,30 @@ def create_app() -> Flask:
         MONGO_DB=database,
         DISABLE_AUTH=disable_auth,
     )
+
+    # Pass in one mongo doc that represents a transaction
+    # The goal is to return a new dict that matches what the app expects
+    def normalize_transactions(doc: Dict[str, Any]) -> Dict[str, Any]:
+        # shallow copy of the doc, we dont change what is coming from mongo
+        out = dict(doc)
+        # all edits will go ingto out
+
+        if "userId" not in out:
+            uid = out.get("user_id")
+            out["userId"] = ObjectId(uid) if isinstance(uid, str) else uid
+        
+        if "amount" not in out:
+            cents = out.get("amount_cents")
+            out["amount"] = round(float(cents or 0) / 100.0, 2)
+        
+        if "date" not in out:
+            date_val = out.get("posted_at") or out.get("authorized_at")
+            out["date"] = date_val
+        
+        return out
+
+
+
     MCC_TO_CATEGORY = {
         "5411": "Groceries",
         "5499": "Groceries",

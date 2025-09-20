@@ -9,19 +9,87 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from bson import ObjectId
 
 
+from bson import ObjectId
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Sequence
+from pymongo.collection import Collection
+
+
+def normalize_txn(doc: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(doc)
+    if "userId" not in out:
+        uid = out.get("user_id")
+        out["userId"] = ObjectId(uid) if isinstance(uid, str) else uid
+    if "accountId" not in out:
+        aid = out.get("account_id")
+        out["accountId"] = ObjectId(aid) if isinstance(aid, str) else aid
+    if "amount" not in out:
+        cents = out.get("amount_cents")
+        out["amount"] = round(float(cents or 0) / 100.0, 2)
+    if "date" not in out:
+        date_val = out.get("posted_at") or out.get("authorized_at")
+        out["date"] = date_val
+    return out
+
 def load_transactions(
     database,
     user_id: ObjectId,
     window_days: int,
     card_object_ids: Optional[Sequence[ObjectId]] = None,
 ) -> List[Dict[str, Any]]:
-    """Fetch transactions for the given user and time window."""
+    """
+    Fetch recent txns for a user.
+    Works with BOTH schemas:
+      - userId:ObjectId or user_id:str(ObjectId)
+      - accountId:ObjectId or account_id:str(ObjectId)
+      - date or posted_at/authorized_at
+      - amount or amount_cents
+    Returns docs normalized to have: userId, accountId, amount (dollars), date (datetime).
+    """
+    coll: Collection = database["transactions"]
 
+    # 1) compute time window (UTC now minus N days)
     cutoff = datetime.utcnow() - timedelta(days=window_days)
-    query: Dict[str, Any] = {"userId": user_id, "date": {"$gte": cutoff}}
+
+    # 2) base filter: match this user AND a recent timestamp in either field
+    base_filter: Dict[str, Any] = {
+        "$and": [
+            {"$or": [{"userId": user_id}, {"user_id": str(user_id)}]},
+            {"$or": [{"date": {"$gte": cutoff}}, {"posted_at": {"$gte": cutoff}}, {"authorized_at": {"$gte": cutoff}}]},
+        ]
+    }
+
+    # 3) optional filter: only selected cards (either schema)
     if card_object_ids:
-        query["accountId"] = {"$in": list(card_object_ids)}
-    return list(database["transactions"].find(query))
+        base_filter["$and"].append({
+            "$or": [
+                {"accountId": {"$in": list(card_object_ids)}},
+                {"account_id": {"$in": [str(x) for x in card_object_ids]}},
+            ]
+        })
+
+    # 4) query Mongo: newest first; cap result size for safety
+    cursor = (
+        coll.find(base_filter)
+            .sort([("date", -1), ("posted_at", -1), ("authorized_at", -1)])
+            .limit(2000)
+    )
+
+    # 5) normalize each doc to a consistent shape
+    rows: List[Dict[str, Any]] = []
+    for doc in cursor:
+        row = normalize_txn(doc)
+
+        # refunds: if your generator stores refunds positive, flip to negative
+        amt = float(row.get("amount", 0) or 0)
+        if row.get("status") == "refund" and amt > 0:
+            amt = -amt
+        row["amount"] = round(amt, 2)
+
+        rows.append(row)
+
+    return rows
+
 
 
 def _summarize_categories(transactions: Iterable[Dict[str, Any]]) -> Tuple[float, Dict[str, float], Dict[str, int]]:
