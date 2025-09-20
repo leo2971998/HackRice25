@@ -17,6 +17,8 @@ from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 from llm.gemini import explain_recommendations
 from services.scoring import score_catalog
 from services.spend import aggregate_spend_details, build_category_rules, compute_user_mix, load_transactions
+from mock_transactions import generate_mock_transactions  # add at top of file or near other imports
+
 
 try:
     from dotenv import load_dotenv
@@ -1065,6 +1067,20 @@ def create_app() -> Flask:
             except ValueError:
                 document["last_sync"] = datetime.utcnow()
         result = database["accounts"].insert_one(document)
+        try:
+            # Immediately backfill this new account with lively synthetic history
+            from mock_transactions import generate_mock_transactions
+            generate_mock_transactions(
+                database,
+                str(user["_id"]),
+                str(result.inserted_id),
+                N=15,          # tweak for hackathon feel
+                days=60,        # last 60 days
+                seed_version="v1",
+            )
+        except Exception as e:
+            # don't fail card creation if mock generation hiccups
+            app.logger.warning(f"mock generation failed for account {result.inserted_id}: {e}")
         return jsonify({"id": str(result.inserted_id)}), 201
 
     def get_card_or_404(card_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
@@ -1348,6 +1364,46 @@ def create_app() -> Flask:
             "youHaveThisCard": bool(best_owned),
             "alternatives": alts
         })
+    
+    @api_bp.post("/transactions/mock/generate")
+    def generate_mock_for_account():
+        """
+        Generate seeded synthetic transactions for a single account.
+        Body: { "account_id": "<ObjectId string>", "count": 120, "days": 60, "seed_version": "v1" }
+        """
+        user = g.current_user
+        body = request.get_json(silent=True) or {}
+        account_id_str = body.get("account_id")
+        if not account_id_str:
+            raise BadRequest("account_id is required")
+
+        try:
+            account_oid = validate_object_id(account_id_str)
+        except Exception:
+            raise BadRequest("account_id must be a valid ObjectId string")
+
+        # ensure the account belongs to this user
+        acct = app.config["MONGO_DB"]["accounts"].find_one(
+            {"_id": account_oid, "userId": user["_id"], "account_type": "credit_card"}
+        )
+        if not acct:
+            raise NotFound("Account not found")
+
+        N = int(body.get("count", 120))
+        days = int(body.get("days", 60))
+        seed_version = str(body.get("seed_version", "v1"))
+
+        # call your generator (expects strings; pass ObjectIds as strings)
+        inserted = generate_mock_transactions(
+            app.config["MONGO_DB"],
+            str(user["_id"]),
+            str(account_oid),
+            N=N,
+            days=days,
+            seed_version=seed_version,
+        )
+        return jsonify({"ok": True, "inserted": inserted})
+
 
 
 
