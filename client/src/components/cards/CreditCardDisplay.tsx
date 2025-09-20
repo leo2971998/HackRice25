@@ -15,10 +15,14 @@ const GRADIENTS = [
 ]
 
 export function CreditCardDisplay({ card, holderName }: CreditCardDisplayProps) {
-  const needsAttention = card.status === "Needs Attention"
+  const normalizedStatus = (card.status || "").toLowerCase()
+  const needsAttention = normalizedStatus === "needs attention"
+  const isApplied = normalizedStatus === "applied" || Boolean(card.appliedAt)
   const gradient = GRADIENTS[card.nickname.charCodeAt(0) % GRADIENTS.length]
   const expiryMonth = card.expires ? card.expires.split("-")[1] : undefined
   const expiryYear = card.expires ? card.expires.slice(2, 4) : undefined
+  const mask = card.mask ? `•••• •••• •••• ${card.mask}` : "•••• •••• •••• — —"
+  const statusLabel = isApplied ? "Applied" : card.status
 
   return (
     <div className={cn("relative overflow-hidden rounded-3xl bg-gradient-to-br p-6 text-white shadow-card", gradient)}>
@@ -28,17 +32,18 @@ export function CreditCardDisplay({ card, holderName }: CreditCardDisplayProps) 
           <h3 className="text-2xl font-semibold">{card.nickname}</h3>
         </div>
         <Badge
-          variant={needsAttention ? "outline" : "success"}
+          variant={needsAttention ? "outline" : isApplied ? "secondary" : "success"}
           className={cn(
             "border-white/40 bg-white/20 text-white",
-            needsAttention && "bg-amber-300/40 text-amber-900"
+            needsAttention && "bg-amber-300/40 text-amber-900",
+            isApplied && "bg-amber-200/30 text-white"
           )}
         >
-          {card.status}
+          {statusLabel}
         </Badge>
       </div>
       <div className="mt-10 space-y-3 text-sm">
-        <p className="text-white/70">•••• •••• •••• {card.mask}</p>
+        <p className="text-white/70">{mask}</p>
         <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/80">
           <span>{holderName || "Swipe Coach member"}</span>
           {expiryMonth && expiryYear ? <span>Exp {expiryMonth}/{expiryYear}</span> : null}

@@ -1,5 +1,6 @@
-import { KeyboardEvent } from "react"
+import type { KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Pencil, Trash2 } from "lucide-react"
 import type { CardRow as CardRowType } from "@/types/api"
 
@@ -19,15 +20,12 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
         }
     }
 
-    const title =
-        card.nickname ||
-        card.productName ||
-        "Credit card"
+    const title = card.nickname || (card as any).productName || "Credit card"
 
     const issuerNet = [card.issuer, card.network].filter(Boolean).join(" • ")
-    const mask = card.account_mask ? `•••• ${card.account_mask}` : undefined
+    const mask = card.mask ? `•••• ${card.mask}` : undefined
     const expires = card.expires ? `Exp ${card.expires}` : undefined
-    const creditLimit = card.credit_limit != null ? `$${Number(card.credit_limit).toLocaleString()}` : undefined
+    const creditLimit = (card as any).credit_limit != null ? `$${Number((card as any).credit_limit).toLocaleString()}` : undefined
     const balance = (card as any).balance != null ? `$${Number((card as any).balance).toLocaleString()}` : undefined
     const apr = (card as any).purchase_apr != null ? `${Number((card as any).purchase_apr).toFixed(2)}% APR` : undefined
     const lastSynced = (card as any).lastSynced ? new Date((card as any).lastSynced).toLocaleDateString() : undefined
@@ -53,9 +51,15 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
                         <span className="truncate text-xs text-muted-foreground">• {issuerNet}</span>
                     ) : null}
                     {card.status ? (
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-              {card.status}
-            </span>
+                        card.status.toLowerCase() === "applied" || card.appliedAt ? (
+                            <Badge variant="outline" className="border-amber-400/60 bg-amber-100/60 text-[10px] uppercase tracking-wide text-amber-800">
+                                Applied
+                            </Badge>
+                        ) : (
+                            <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+                                {card.status}
+                            </Badge>
+                        )
                     ) : null}
                 </div>
 

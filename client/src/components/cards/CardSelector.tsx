@@ -1,3 +1,5 @@
+import { type ReactNode } from "react"
+
 import CardRow from "@/components/cards/CardRow"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +14,8 @@ type Props = {
     onAdd?: () => void
     isLoading?: boolean
     heightClass?: string
+    headerExtras?: ReactNode
+    emptyMessage?: string
 }
 
 export function CardSelector({
@@ -23,17 +27,24 @@ export function CardSelector({
                                  onAdd,
                                  isLoading,
                                  heightClass = "max-h-[760px]", // bumped taller default
+                                 headerExtras,
+                                 emptyMessage,
                              }: Props) {
     return (
         <Card className="rounded-3xl">
             <CardHeader className="pb-3">
-                <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="text-lg font-semibold">Your cards</CardTitle>
-                    {onAdd ? (
-                        <Button size="sm" onClick={onAdd}>
-                            Add card
-                        </Button>
-                    ) : null}
+                <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <CardTitle className="text-lg font-semibold">Your cards</CardTitle>
+                        <div className="flex items-center gap-2">
+                            {headerExtras}
+                            {onAdd ? (
+                                <Button size="sm" onClick={onAdd}>
+                                    Add card
+                                </Button>
+                            ) : null}
+                        </div>
+                    </div>
                 </div>
             </CardHeader>
             <CardContent className="flex h-full flex-col gap-3">
@@ -43,7 +54,7 @@ export function CardSelector({
                     </div>
                 ) : cards.length === 0 ? (
                     <div className="space-y-3 text-sm text-muted-foreground">
-                        <p>No cards linked yet.</p>
+                        <p>{emptyMessage ?? "No cards linked yet."}</p>
                         {onAdd ? (
                             <div>
                                 <Button onClick={onAdd}>Link a card</Button>

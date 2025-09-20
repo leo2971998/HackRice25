@@ -2,6 +2,10 @@ import { apiConfig } from "@/lib/env"
 
 let tokenGetter: (() => Promise<string | null>) | null = null
 
+type ApiRequestInit = Omit<RequestInit, "body"> & {
+  body?: BodyInit | Record<string, unknown> | undefined
+}
+
 export function setAccessTokenProvider(getter: (() => Promise<string | null>) | null) {
   tokenGetter = getter
 }
@@ -18,10 +22,11 @@ function buildUrl(path: string): string {
   return `${API_BASE_URL}${normalizedPath}`
 }
 
-export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiFetch<T>(path: string, init?: ApiRequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {})
+  const isFormData = init?.body instanceof FormData
   headers.set("Accept", "application/json")
-  if (!(init?.body instanceof FormData)) {
+  if (!isFormData) {
     headers.set("Content-Type", "application/json")
   }
 
@@ -32,8 +37,17 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     }
   }
 
+  const rawBody = init?.body
+  let body: BodyInit | undefined
+  if (rawBody != null && !isFormData && typeof rawBody !== "string") {
+    body = JSON.stringify(rawBody)
+  } else {
+    body = rawBody as BodyInit | undefined
+  }
+
   const response = await fetch(buildUrl(path), {
     ...init,
+    body,
     headers,
     credentials: init?.credentials ?? "include",
   })

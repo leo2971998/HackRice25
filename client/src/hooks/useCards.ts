@@ -96,19 +96,38 @@ export function useDeleteCard(options?: MutationOpts<void, string>) {
 
 type ApplicationPayload = {
   slug: string
-  product_name: string
-  issuer: string
 }
 
-export function useApplyForCard(options?: MutationOpts<{ status: string; id: string }, ApplicationPayload>) {
+type ApplicationResponse = { status: string; id: string }
+
+export function useApplyForCard(options?: MutationOpts<ApplicationResponse, ApplicationPayload>) {
   const { onSuccess, ...rest } = options ?? {}
   return useMutation({
     mutationFn: (payload: ApplicationPayload) =>
-      apiFetch<{ status: string; id: string }>("/applications", {
+      apiFetch<ApplicationResponse>("/applications", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: payload,
       }),
     onSuccess: (data, variables, onMutateResult, context) => {
+      onSuccess?.(data, variables, onMutateResult, context)
+    },
+    ...rest,
+  })
+}
+
+type ApprovePayload = { application_id: string }
+
+export function useApproveApplication(options?: MutationOpts<{ ok: boolean }, ApprovePayload>) {
+  const queryClient = useQueryClient()
+  const { onSuccess, ...rest } = options ?? {}
+  return useMutation({
+    mutationFn: (payload: ApprovePayload) =>
+      apiFetch<{ ok: boolean }>("/applications/approve", {
+        method: "POST",
+        body: payload,
+      }),
+    onSuccess: (data, variables, onMutateResult, context) => {
+      queryClient.invalidateQueries({ queryKey: ["cards"] })
       onSuccess?.(data, variables, onMutateResult, context)
     },
     ...rest,

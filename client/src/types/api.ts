@@ -65,8 +65,10 @@ export type CardRow = {
   mask: string
   type: "credit_card"
   expires?: string | null
-  status: "Active" | "Needs Attention"
+  status: string
   lastSynced?: string | null
+  appliedAt?: string | null
+  cardProductSlug?: string | null
 }
 
 export type CardSummary = {
@@ -108,6 +110,35 @@ export type CreditCardProduct = {
   link_url?: string | null
   active: boolean
   last_updated?: string | null
+}
+
+export type RewardsEstimateResponse = {
+  card: {
+    slug?: string | null
+    product_name?: string | null
+    issuer?: string | null
+  }
+  windowDays: number
+  earnings: {
+    total: number
+    byCategory: Record<string, number>
+  }
+  projectedMonthly: number
+}
+
+export type RewardsCompareResult = {
+  slug?: string | null
+  product_name?: string | null
+  issuer?: string | null
+  earnings: {
+    total: number
+    byCategory: Record<string, number>
+  }
+}
+
+export type RewardsCompareResponse = {
+  mix: { amount: number; category: string }[]
+  results: RewardsCompareResult[]
 }
 
 export type RecommendationBonusBreakdown = {

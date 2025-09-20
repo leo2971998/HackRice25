@@ -58,12 +58,6 @@ export function AddCardDialog({ open, onOpenChange }: AddCardDialogProps) {
         return (catalog ?? []).filter((p: any) => p?.issuer === issuer)
     }, [catalog, issuer])
 
-    // Keep network in sync with selected product
-    const selectedProduct = useMemo(
-        () => filteredProducts.find((p: any) => p.slug === selectedSlug),
-        [filteredProducts, selectedSlug]
-    )
-
     // When issuer changes, clear product/slug and (optionally) network
     const handleIssuerChange = (value: string) => {
         setIssuer(value)
@@ -79,11 +73,10 @@ export function AddCardDialog({ open, onOpenChange }: AddCardDialogProps) {
     }
 
     // Derived validations
-    const { digitsOnly, last4, isLast4Valid, hasFullCardNumber } = useMemo(() => {
+    const { last4, isLast4Valid, hasFullCardNumber } = useMemo(() => {
         const digits = cardNumber.replace(/\D+/g, "")
         const last = extractLast4(cardNumber)
         return {
-            digitsOnly: digits,
             last4: last,
             isLast4Valid: /^\d{4}$/.test(last),
             hasFullCardNumber: digits.length === 16,
@@ -267,8 +260,7 @@ export function AddCardDialog({ open, onOpenChange }: AddCardDialogProps) {
                                 mask: last4,                       // last 4 only
                                 expiry_month: monthNumber,
                                 expiry_year: yearNumber,
-                                product_slug: selectedSlug,        // REQUIRED — derived from product selection
-                                // legacy/back-compat if your API still uses this name:
+                                card_product_slug: selectedSlug,
                                 card_product_id: selectedSlug,
                             })
                         }
