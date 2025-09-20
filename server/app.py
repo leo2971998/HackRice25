@@ -138,6 +138,10 @@ def ensure_indexes(database) -> None:
     credit_cards.create_index([("issuer", ASCENDING), ("network", ASCENDING)])
     credit_cards.create_index([("slug", ASCENDING)], unique=True, name="slug_1")
 
+    merchants = database["merchants"]
+    merchants.create_index([("name", ASCENDING)])
+    merchants.create_index([("slug", ASCENDING)])
+
 
 def merge_preferences(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
     merged = {**existing}
@@ -320,15 +324,16 @@ def create_app() -> Flask:
     # Only load Auth0 settings if we actually need them
     app_settings = None if disable_auth else get_auth_settings()
 
-    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
+    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173").rstrip("/")
     CORS(
         app,
-        resources={r"/api/*": {"origins": [allowed_origin]}},
+        resources={r"/api/*": {"origins": [allowed_origin, "http://127.0.0.1:5173"]}},
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
-        expose_headers=["Content-Type"]
+        expose_headers=["Content-Type"],
     )
+
 
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
@@ -340,6 +345,76 @@ def create_app() -> Flask:
         MONGO_DB=database,
         DISABLE_AUTH=disable_auth,
     )
+    MCC_TO_CATEGORY = {
+        "5411": "Groceries",
+        "5499": "Groceries",
+        "5812": "Food and Drink",
+        "5814": "Food and Drink",
+        }
+
+    CATEGORY_ALIAS = {
+        "dining": "Food and Drink",
+        "restaurant": "Food and Drink",
+        "restaurants": "Food and Drink",
+        "grocery": "Groceries",
+        "groceries": "Groceries",
+        "travel": "Travel",
+        "pharmacy": "Drugstores",
+        "drugstore": "Drugstores",
+        "entertainment": "Entertainment",
+        "streaming": "Streaming",
+        "transit": "Transportation",
+    }
+
+    def normalize_merchant_category(doc: Dict[str, Any]) -> str:
+        # 1. Check explicit override
+        ov = (doc.get("overrides") or {})
+        if isinstance(ov, dict) and ov.get("treatAs"):
+            raw = str(ov["treatAs"]).strip().lower()
+            return CATEGORY_ALIAS.get(raw, doc["overrides"]["treatAs"])
+
+        # 2. Check primaryCategory
+        if doc.get("primaryCategory"):
+            raw = str(doc["primaryCategory"]).strip().lower()
+            return CATEGORY_ALIAS.get(raw, doc["primaryCategory"])
+
+        # 3. Check MCC mapping
+        mcc = str(doc.get("mcc") or "")
+        if mcc in MCC_TO_CATEGORY:
+            return MCC_TO_CATEGORY[mcc]
+
+        return "Other"
+
+    
+    def earn_percent_for_product(product: Dict[str, Any], category: str, monthly_spend: float) -> float:
+        base = float(product.get("base_cashback", 0.0) or 0.0)
+        rules = product.get("rewards") or []
+        rule = next((r for r in rules if r.get("category") == category), None)
+        if not rule:
+            return base
+
+        rate = float(rule.get("rate", base) or base)  # percent back as decimal, example 0.04
+        cap = rule.get("cap_monthly")
+        if not cap:
+            return rate
+
+        try:
+            cap_val = float(cap)
+        except Exception:
+            return rate
+
+        spend = float(monthly_spend or 0)
+        if spend <= 0:
+            return rate
+        if spend <= cap_val:
+            return rate
+
+        # blended percent if over cap
+        return (cap_val * rate + (spend - cap_val) * base) / spend
+
+
+    
+
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -1039,7 +1114,6 @@ def create_app() -> Flask:
         database["accounts"].delete_one({"_id": card["_id"]})
         return ("", 204)
 
-    app.register_blueprint(api_bp)
 
     @app.route("/api/health", methods=["GET"])
     def health_check():
@@ -1069,12 +1143,197 @@ def create_app() -> Flask:
         response.status_code = 404
         return response
 
+    @api_bp.get("/merchants/all")
+    def list_all_merchants():
+        """
+        Return all seeded merchants (not user-specific).
+        Supports optional limit/offset to avoid huge payloads.
+        GET /api/merchants/all?limit=1000&offset=0
+        """
+        db = app.config["MONGO_DB"]
+        coll = db["merchants"]
+
+        limit_raw = request.args.get("limit", 1000)
+        offset_raw = request.args.get("offset", 0)
+
+        try:
+            limit = max(1, min(int(limit_raw), 5000))  # hard cap
+            offset = max(0, int(offset_raw))
+        except (TypeError, ValueError):
+            raise BadRequest("limit/offset must be integers")
+
+        cursor = (
+            coll.find(
+                {},
+                {
+                    "_id": 1,
+                    "name": 1,
+                    "slug": 1,
+                    "mcc": 1,
+                    "primaryCategory": 1,
+                    "brandGroup": 1,
+                    "aliases": 1,
+                    "domains": 1,
+                    "tags": 1,
+                },
+            )
+            .sort("name", ASCENDING)
+            .skip(offset)
+            .limit(limit)
+        )
+
+        items = [
+            {
+                "id": str(doc["_id"]),
+                "name": doc.get("name", ""),
+                "slug": doc.get("slug", ""),
+                "mcc": doc.get("mcc"),
+                "primaryCategory": doc.get("primaryCategory"),
+                "brandGroup": doc.get("brandGroup"),
+                "aliases": doc.get("aliases", []),
+                "domains": doc.get("domains", []),
+                "tags": doc.get("tags", []),
+            }
+            for doc in cursor
+        ]
+
+        total = coll.estimated_document_count()
+        return jsonify({"items": items, "total": total, "limit": limit, "offset": offset})
+    
+    @api_bp.get("/cards/with-product")
+    def list_cards_with_product():
+        """
+        Return the current user's credit cards joined with the credit_cards catalog.
+        Joins accounts.card_product_id (slug) -> credit_cards.slug
+        """
+        user = g.current_user
+        pipeline = [
+            {"$match": {"userId": user["_id"], "account_type": "credit_card"}},
+            {
+                "$lookup": {
+                    "from": "credit_cards",
+                    "localField": "card_product_id",  # slug stored in accounts
+                    "foreignField": "slug",           # slug in credit_cards
+                    "as": "product",
+                }
+            },
+            {"$unwind": "$product"},
+            {
+                "$project": {
+                    "account_id": {"$toString": "$_id"},
+                    "nickname": 1,
+                    "issuer": 1,
+                    "network": 1,
+                    "account_mask": 1,
+                    "card_product_id": 1,
+                    "product_slug": "$product.slug",
+                    "product_name": "$product.product_name",
+                    "product_issuer": "$product.issuer",
+                    "base_cashback": "$product.base_cashback",
+                    "rewards": "$product.rewards",
+                    "annual_fee": "$product.annual_fee",
+                    "active": "$product.active",
+                }
+            },
+        ]
+        rows = list(database["accounts"].aggregate(pipeline))
+        return jsonify(rows)
+    
+    @api_bp.route("/recommendations/best-card", methods=["GET", "POST"])
+    def best_card_for_merchant():
+        user = g.current_user
+
+        # read inputs from JSON (POST) or query params (GET)
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            merchant = (data.get("merchant") or "").strip()
+            spend = float(data.get("assumedMonthlySpend") or 150)
+            selected_ids = data.get("selectedCardIds") or []
+        else:
+            merchant = (request.args.get("merchant") or "").strip()
+            spend = float(request.args.get("spend") or 150)
+            selected_ids = request.args.getlist("selectedCardIds")
+
+        if not merchant:
+            raise BadRequest("merchant is required")
+
+        # normalize merchant -> category
+        m = database["merchants"].find_one({"$or":[{"name":merchant},{"aliases":merchant},{"slug":merchant.lower()}]})
+        if not m:
+            raise NotFound("Merchant not found")
+        category = normalize_merchant_category(m)
+
+        # user cards + products
+        pipeline = [
+            {"$match": {"userId": user["_id"], "account_type": "credit_card"}},
+            {"$lookup": {"from":"credit_cards","localField":"card_product_id","foreignField":"slug","as":"product"}},
+            {"$unwind": "$product"},
+        ]
+        # optional filter by selected ids
+        try:
+            obj_ids = [ObjectId(x) for x in selected_ids] if selected_ids else []
+            if obj_ids:
+                pipeline.insert(0, {"$match": {"_id": {"$in": obj_ids}}})
+        except Exception:
+            pass
+
+        owned_rows = list(database["accounts"].aggregate(pipeline))
+
+        # score owned
+        owned = []
+        for row in owned_rows:
+            prod = row["product"]
+            pct = float(earn_percent_for_product(prod, category, spend))
+            owned.append({
+                "accountId": str(row["_id"]),
+                "nickname": row.get("nickname") or prod.get("product_name"),
+                "issuer": row.get("issuer") or prod.get("issuer"),
+                "rewardRateText": f"{int(round(pct*100))}% {category}",
+                "percentBack": pct,
+            })
+        best_owned = max(owned, key=lambda x: x["percentBack"]) if owned else None
+        best_owned_pct = float(best_owned["percentBack"]) if best_owned else 0.0
+
+        # alternatives not owned
+        owned_slugs = {row["product"]["slug"] for row in owned_rows}
+        alts = []
+        for prod in database["credit_cards"].find({"active": True, "slug": {"$nin": list(owned_slugs)}}):
+            pct = float(earn_percent_for_product(prod, category, spend))
+            diff = max(0.0, pct - best_owned_pct)
+            est = round(diff * spend, 2) if spend else None
+            alts.append({
+                "id": prod.get("slug"),
+                "name": prod.get("product_name"),
+                "issuer": prod.get("issuer"),
+                "rewardRateText": f"{int(round(pct*100))}% {category}",
+                "percentBack": pct,
+                "estSavingsMonthly": est,
+            })
+        alts.sort(key=lambda x: x["percentBack"], reverse=True)
+        alts = sorted(alts, key=lambda x: x["percentBack"], reverse=True)[:3]
+
+        return jsonify({
+            "merchant": m.get("name"),
+            "category": category,
+            "assumedMonthlySpend": spend,
+            "bestOwned": best_owned,
+            "youHaveThisCard": bool(best_owned),
+            "alternatives": alts
+        })
+
+
+
+    app.register_blueprint(api_bp)
+
+    
+
+
     return app
 
 
 if __name__ == "__main__":
     # Create and run the Flask app directly (use Flask CLI in production)
     app = create_app()
-    port = int(os.environ.get("PORT", "5000"))
+    port = int(os.environ.get("PORT", "8000"))
     debug = os.environ.get("FLASK_DEBUG", "1") in ("1", "true", "True")
     app.run(host="0.0.0.0", port=port, debug=debug)
