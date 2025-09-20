@@ -20,6 +20,7 @@ const api = axios.create({
 
 type BestCardResult = {
   merchant: string;
+  category?: string;
   bestCard: {
     id: string;
     nickname: string;
@@ -33,6 +34,7 @@ type BestCardResult = {
     name: string;
     rewardRateText: string;
     estSavingsMonthly?: number;
+    percentBack?: number;
   }>;
 };
 
@@ -61,34 +63,40 @@ export function BestCardFinder({
   selectedCardIds?: string[];
   accountRows: { id: string; nickname: string; issuer: string }[];
 }) {
+  // form state
   const [merchant, setMerchant] = useState("");
+  const [spend, setSpend] = useState<number>(150);
+
+  // merchants list (autocomplete)
   const [allMerchants, setAllMerchants] = useState<MerchantRow[]>([]);
   const [loadingMerchants, setLoadingMerchants] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // result + errors
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BestCardResult | null>(null);
 
-  // --- inline API call to get ALL merchants (no exports) ---
-  async function getAllMerchants(limit = 2000): Promise<MerchantRow[]> {
-    const res = await api.get("/merchants/all", { params: { limit } });
-    return res.data.items as MerchantRow[];
-  }
-
-  // load once on mount
+  // fetch seeded merchants once
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         setLoadingMerchants(true);
         setLoadError(null);
-        const items = await getAllMerchants(2000);
-        if (mounted) setAllMerchants(items);
+        const res = await api.get("/merchants/all", {
+          params: { limit: 2000 },
+        });
+        if (!mounted) return;
+        setAllMerchants(res.data.items as MerchantRow[]);
       } catch (e: any) {
-        if (mounted) setLoadError(e?.message || "Failed to load merchants");
+        if (!mounted) return;
+        setLoadError(
+          e?.response?.data?.message || e?.message || "Failed to load merchants"
+        );
       } finally {
-        if (mounted) setLoadingMerchants(false);
+        if (!mounted) return;
+        setLoadingMerchants(false);
       }
     })();
     return () => {
@@ -109,94 +117,66 @@ export function BestCardFinder({
       .slice(0, 6);
   }, [merchant, merchantOptions]);
 
+  // call backend
   async function onFind() {
-    if (!merchant.trim()) {
+    const name = merchant.trim();
+    if (!name) {
       setError("Enter a merchant");
       setResult(null);
       return;
     }
+    if (!(spend > 0)) {
+      setError("Enter a valid monthly spend");
+      setResult(null);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      // mock delay
-      await new Promise((r) => setTimeout(r, 600));
+      // POST is cleaner since we may send arrays later
+      const res = await api.post("/recommendations/best-card", {
+        merchant: name,
+        assumedMonthlySpend: spend,
+        selectedCardIds, // optional
+      });
 
-      // mock results based on input
-      let mockData: BestCardResult;
-      const m = merchant.toLowerCase();
-      if (m.includes("starbucks")) {
-        mockData = {
-          merchant: merchant.trim(),
-          bestCard: {
-            id: "card_chase",
-            nickname: "Chase Sapphire Preferred",
-            issuer: "Chase",
-            rewardRateText: "3x at Dining",
-            estSavingsMonthly: 15.0,
-          },
-          youHaveThisCard: true,
-          alternatives: [
-            {
-              id: "alt_amex_gold",
-              name: "Amex Gold",
-              rewardRateText: "4x at Restaurants",
-              estSavingsMonthly: 12.0,
+      const data = res.data;
+      // map backend -> UI shape
+      const mapped: BestCardResult = {
+        merchant: data.merchant,
+        category: data.category,
+        bestCard: data.bestOwned
+          ? {
+              id: data.bestOwned.accountId,
+              nickname: data.bestOwned.nickname,
+              issuer: data.bestOwned.issuer,
+              rewardRateText: data.bestOwned.rewardRateText, // e.g. "3% Food and Drink"
+              estSavingsMonthly: data.alternatives?.[0]?.estSavingsMonthly, // simple highlight
+            }
+          : {
+              id: "none",
+              nickname: "No owned card",
+              issuer: "",
+              rewardRateText: `0% ${data.category ?? ""}`.trim(),
             },
-          ],
-        };
-      } else if (m.includes("amazon")) {
-        mockData = {
-          merchant: merchant.trim(),
-          bestCard: {
-            id: "card_amazon",
-            nickname: "Amazon Prime Visa",
-            issuer: "Chase",
-            rewardRateText: "5% on Amazon",
-            estSavingsMonthly: 25.0,
-          },
-          youHaveThisCard: false,
-          alternatives: [
-            {
-              id: "alt_citi_double",
-              name: "Citi Double Cash",
-              rewardRateText: "2% everywhere",
-              estSavingsMonthly: 5.0,
-            },
-          ],
-        };
-      } else {
-        mockData = {
-          merchant: merchant.trim(),
-          bestCard: {
-            id: "card_generic",
-            nickname: "Citi Premier",
-            issuer: "Citi",
-            rewardRateText: "3x Travel & Dining",
-            estSavingsMonthly: 10.0,
-          },
-          youHaveThisCard: false,
-          alternatives: [
-            {
-              id: "alt_amex_blue",
-              name: "Amex Blue Cash Preferred",
-              rewardRateText: "6% at Supermarkets",
-              estSavingsMonthly: 7.0,
-            },
-            {
-              id: "alt_chase_freedom",
-              name: "Chase Freedom Unlimited",
-              rewardRateText: "1.5% everywhere",
-              estSavingsMonthly: 3.0,
-            },
-          ],
-        };
-      }
+        youHaveThisCard: !!data.bestOwned,
+        alternatives: (data.alternatives || []).map((a: any) => ({
+          id: a.id,
+          name: `${a.issuer ?? ""} ${a.name ?? ""}`.trim(),
+          rewardRateText: a.rewardRateText,
+          estSavingsMonthly: a.estSavingsMonthly,
+          percentBack: a.percentBack,
+        })),
+      };
 
-      setResult(mockData);
+      setResult(mapped);
     } catch (e: any) {
-      setError(e.message || "Something went wrong");
+      setError(
+        e?.response?.data?.message || e?.message || "Something went wrong"
+      );
     } finally {
       setIsLoading(false);
     }
@@ -209,14 +189,15 @@ export function BestCardFinder({
           Best card for a merchant
         </CardTitle>
         <CardDescription>
-          Type a store and we’ll suggest the best card. Autocomplete is built
-          from your DB.
+          Type a store and we’ll suggest the best card from your linked cards.
         </CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-6">
+        {/* Inputs row */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
-          <div className="sm:col-span-8 space-y-2">
+          {/* Merchant input + chips */}
+          <div className="sm:col-span-7 space-y-2">
             <Label htmlFor="merchant">Merchant</Label>
             <Input
               id="merchant"
@@ -249,7 +230,25 @@ export function BestCardFinder({
             )}
           </div>
 
-          <div className="sm:col-span-4 flex items-end">
+          {/* Spend input */}
+          <div className="sm:col-span-3 space-y-2">
+            <Label htmlFor="spend">Monthly spend estimate</Label>
+            <Input
+              id="spend"
+              type="number"
+              min={0}
+              step="1"
+              value={Number.isFinite(spend) ? spend : 0}
+              onChange={(e) => setSpend(Number(e.target.value))}
+              placeholder="150"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Used to estimate monthly savings
+            </p>
+          </div>
+
+          {/* Button */}
+          <div className="sm:col-span-2 flex items-end">
             <Button
               className="w-full"
               onClick={onFind}
@@ -260,27 +259,33 @@ export function BestCardFinder({
           </div>
         </div>
 
+        {/* Error */}
         {error && (
           <div className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
+        {/* Empty state */}
         {!error && !isLoading && !result && (
           <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
             Start typing a merchant. We’ll use your seeded list for suggestions.
           </div>
         )}
 
+        {/* Results */}
         {result && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
+            {/* Best owned card */}
             <Card className="md:col-span-7 rounded-2xl">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
                   Best card
                 </CardTitle>
                 <CardDescription>
-                  Based on category and reward rate
+                  {result.category
+                    ? `Category: ${result.category}`
+                    : "Based on category and reward rate"}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -288,9 +293,11 @@ export function BestCardFinder({
                   <div className="min-w-0">
                     <p className="font-semibold text-foreground">
                       {result.bestCard.nickname}{" "}
-                      <span className="text-muted-foreground">
-                        ({result.bestCard.issuer})
-                      </span>
+                      {result.bestCard.issuer && (
+                        <span className="text-muted-foreground">
+                          ({result.bestCard.issuer})
+                        </span>
+                      )}
                     </p>
                     <p className="text-sm text-muted-foreground">
                       {result.bestCard.rewardRateText}
@@ -299,25 +306,33 @@ export function BestCardFinder({
                   {result.youHaveThisCard ? (
                     <Badge variant="secondary">You have this card</Badge>
                   ) : (
-                    <Badge>New</Badge>
+                    <Badge>Suggestion</Badge>
                   )}
                 </div>
-                {typeof result.bestCard.estSavingsMonthly === "number" && (
+
+                {typeof result.bestCard.estSavingsMonthly === "number" &&
+                result.bestCard.estSavingsMonthly > 0 ? (
                   <p className="text-sm text-muted-foreground">
                     Est. monthly gain:{" "}
                     <span className="font-semibold text-foreground">
                       {usd.format(result.bestCard.estSavingsMonthly)}
                     </span>
                   </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Est. monthly gain depends on your actual spend pattern.
+                  </p>
                 )}
+
                 <p className="text-xs text-muted-foreground">
                   {result.youHaveThisCard
                     ? `You already have the best card for ${result.merchant}.`
-                    : `This beats your current linked cards for ${result.merchant}.`}
+                    : `No owned card beats this for ${result.merchant}.`}
                 </p>
               </CardContent>
             </Card>
 
+            {/* Alternatives */}
             <Card className="md:col-span-5 rounded-2xl">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
@@ -341,12 +356,14 @@ export function BestCardFinder({
                         <p className="text-sm text-muted-foreground">
                           {alt.rewardRateText}
                         </p>
-                        {typeof alt.estSavingsMonthly === "number" && (
-                          <p className="text-xs text-muted-foreground">
-                            You could save about{" "}
-                            {usd.format(alt.estSavingsMonthly)} more per month.
-                          </p>
-                        )}
+                        {typeof alt.estSavingsMonthly === "number" &&
+                          alt.estSavingsMonthly > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              You could save about{" "}
+                              {usd.format(alt.estSavingsMonthly)} more per
+                              month.
+                            </p>
+                          )}
                       </div>
                     ))}
                     <p className="text-xs text-muted-foreground">
