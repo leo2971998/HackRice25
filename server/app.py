@@ -125,7 +125,26 @@ def create_app() -> Flask:
     users_collection.create_index([("auth0_id", ASCENDING)], unique=True)
     users_collection.create_index([("email", ASCENDING)], unique=True, sparse=True)
 
+    cards_collection = database["cards"]
+    cards_collection.create_index([("created_at", ASCENDING)])
+
     auth_decorator = requires_auth(app_settings)
+
+    def to_front(doc: Dict[str, Any]) -> Dict[str, Any]:
+        return{
+            "id": str(doc["_id"]),
+            "product": doc.get("product", ""),
+            "issuer": doc.get("issuer", ""),
+            "network": doc.get("network", ""),
+            "last4": doc.get("last4", ""),
+            "expires": doc.get("expires", ""),
+        }
+
+    # Card Routes
+    @app.get("/api/cards")
+    def list_cards_public():
+        docs = cards_collection.find().sort("_id", -1)
+        return jsonify([to_front(d) for d in docs])
 
     @app.route("/api/health", methods=["GET"])
     def health_check():
@@ -186,6 +205,46 @@ def create_app() -> Flask:
         response.status_code = 500
         return response
 
+    options_collection = database["options"]
+
+    @app.get("/api/options")
+    def get_options():
+        doc = options_collection.find_one({"_id": "dropdowns"}) or {}
+        return jsonify({"issuers" : doc.get("issuers", []), "networks" : doc.get("networks", []) })
+    
+    # GET Card Products
+    @app.get("/api/issuers")
+    def get_issuers():
+        issuers = database["card_products"].distinct("issuer")
+        issuers.sort()
+        return jsonify(issuers)
+
+    @app.get("/api/networks")
+    def get_networks():
+        issuer = request.args.get("issuer")
+        if not issuer:
+            return jsonify([])
+        
+        networks = database["card_products"].distinct("network", {"issuer" : issuer})
+        networks.sort()
+        return jsonify(networks)
+
+    @app.get("/api/products")
+    def get_products():
+        issuer = request.args.get("issuer")
+        network = request.args.get("network")
+        query = {}
+
+        if issuer:
+            query["issuer"] = issuer
+        if network:
+            query["network"] = network
+        
+        products = database["card_products"].find(query, {"_id": 0, "product": 1}).sort("product", 1)
+        return jsonify([p["product"] for p in products])
+
+
+
     return app
 
 
@@ -193,5 +252,5 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
