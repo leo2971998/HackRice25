@@ -1,162 +1,54 @@
-import { Link } from "react-router-dom";
-import { ChevronRight, Link2 } from "lucide-react";
+import { ShieldCheck, Sparkles } from "lucide-react"
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { PageSection } from "@/components/layout/PageSection";
-import { StatTile } from "@/components/cards/StatTile";
-import { CreditCardDisplay } from "@/components/cards/CreditCardDisplay";
-import { MoneyMomentCard } from "@/components/cards/MoneyMomentCard";
-import { DonutChart } from "@/components/charts/DonutChart";
-import { MerchantTable } from "@/components/cards/MerchantTable";
-import {
-  categorySummaries,
-  linkedAccounts,
-  merchants,
-  moneyMoments,
-  statSummaries,
-} from "@/lib/mock-data";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { PageSection } from "@/components/layout/PageSection"
 
 export function HomePage() {
   return (
-    <div className="container space-y-8 md:space-y-10 lg:space-y-12">
-      {/* Hero Section with Stats */}
+    <div className="space-y-12">
       <PageSection
-        title="Welcome back, Avery"
-        description="Here's the pulse on your spend, accounts, and the money moments worth celebrating."
-        actions={
-          <Button asChild variant="secondary" className="text-sm md:text-base">
-            <Link to="/recommendations">
-              <span className="hidden md:inline">Explore recommendations</span>
-              <span className="md:hidden">Recommendations</span>
-            </Link>
-          </Button>
-        }
-      >
-        {/* Responsive Stats Grid */}
-        <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-          {statSummaries.map((stat) => (
-            <StatTile key={stat.label} {...stat} />
-          ))}
-        </div>
-      </PageSection>
+        title="Welcome to Swipe Coach"
+        description="We’ve connected Auth0 and are ready to plug in your spending data next."
+        actions={<Badge variant="success" className="gap-1"><Sparkles className="h-4 w-4" /> Live auth</Badge>}
+      />
 
-      {/* Row 1: Spending Chart + Money Moments */}
-      <div className="grid gap-6 md:gap-8 lg:gap-10 grid-cols-1 lg:grid-cols-12">
-        {/* Spending by Category */}
-        <Card className="overflow-hidden rounded-2xl md:rounded-3xl lg:col-span-7">
-          <CardHeader className="px-4 md:px-6 pb-2 space-y-1">
-            <CardTitle className="text-base md:text-lg font-semibold">
-              Spending by category
-            </CardTitle>
-            <p className="text-xs md:text-sm text-muted-foreground">
-              Latest 30 days compared with your plan.
-            </p>
-          </CardHeader>
-          <CardContent className="px-4 md:px-6">
-            <DonutChart data={categorySummaries} />
-          </CardContent>
-        </Card>
+      <Card className="rounded-3xl border border-border/60 bg-white/70 p-6 shadow-soft backdrop-blur dark:bg-zinc-900/60">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-lg font-semibold">What’s ready today</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 text-sm text-muted-foreground">
+          <p>
+            • Secure Auth0 login protects the dashboard and issues API tokens scoped to
+            <span className="font-medium text-foreground"> https://api.hackrice25.com</span>.
+          </p>
+          <p>• The React app calls <code className="rounded bg-muted px-1 py-0.5 text-xs">GET /api/me</code> after login to provision your profile.</p>
+          <p>• MongoDB keeps track of each Auth0 user so future product data can build on a stable identity.</p>
+        </CardContent>
+      </Card>
 
-        {/* Money Moments */}
-        <Card className="overflow-hidden rounded-2xl md:rounded-3xl lg:col-span-5">
-          <CardHeader className="px-4 md:px-6 pb-2 space-y-1">
-            <CardTitle className="text-base md:text-lg font-semibold">
-              Money Moments
-            </CardTitle>
-            <p className="text-xs md:text-sm text-muted-foreground">
-              Little wins and nudges curated by Flow Coach.
-            </p>
-          </CardHeader>
-          <CardContent className="px-4 md:px-6 grid gap-3 md:gap-4">
-            {moneyMoments.map((moment) => (
-              <MoneyMomentCard key={moment.title} {...moment} />
-            ))}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Row 2: Merchants + Linked Accounts */}
-      <div className="grid gap-6 md:gap-8 lg:gap-10 grid-cols-1 lg:grid-cols-12">
-        {/* Merchants */}
-        <Card className="overflow-hidden rounded-2xl md:rounded-3xl lg:col-span-7">
-          <CardHeader className="px-4 md:px-6 pb-2 space-y-1">
-            <CardTitle className="text-base md:text-lg font-semibold">
-              Top merchants
-            </CardTitle>
-            <p className="text-xs md:text-sm text-muted-foreground">
-              Where your money went recently.
-            </p>
-          </CardHeader>
-          <CardContent className="px-0 md:px-2">
-            <div className="overflow-x-auto px-4 md:px-4">
-              <MerchantTable merchants={merchants} />
+      <Card className="rounded-3xl border border-border/60 bg-white/70 p-6 shadow-soft backdrop-blur dark:bg-zinc-900/60">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-lg font-semibold">Coming next</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 text-sm text-muted-foreground">
+          <div className="flex items-start gap-3">
+            <span className="mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <ShieldCheck className="h-4 w-4" />
+            </span>
+            <div className="space-y-2">
+              <p className="font-medium text-foreground">Account linking & spend</p>
+              <p>
+                Plaid and CSV imports are paused for now. As soon as integrations land, this space will unlock real balances,
+                category charts, and transaction workflows.
+              </p>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Linked Accounts */}
-        <Card className="overflow-hidden rounded-2xl md:rounded-3xl lg:col-span-5">
-          <CardHeader className="px-4 md:px-6 pb-2 space-y-1">
-            <CardTitle className="text-base md:text-lg font-semibold">
-              Linked accounts
-            </CardTitle>
-            <p className="text-xs md:text-sm text-muted-foreground">
-              Connect all the places your money flows.
-            </p>
-          </CardHeader>
-          <CardContent className="px-4 md:px-6 space-y-3 md:space-y-4">
-            {linkedAccounts.map((account) => (
-              <div
-                key={account.id}
-                className="flex items-center justify-between rounded-xl md:rounded-2xl border px-3 md:px-4 py-2.5 md:py-3"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-foreground text-sm md:text-base truncate">
-                    {account.institution}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    •••• {account.mask} ·{" "}
-                    <span className="hidden sm:inline">
-                      Sync {account.lastSynced}
-                    </span>
-                    <span className="sm:hidden">{account.lastSynced}</span>
-                  </p>
-                </div>
-                <Badge
-                  variant={account.status === "Active" ? "success" : "outline"}
-                  className="text-xs shrink-0 ml-2"
-                >
-                  {account.status}
-                </Badge>
-              </div>
-            ))}
-
-            <Button
-              variant="ghost"
-              className="w-full justify-between text-sm md:text-base py-2 md:py-2.5"
-            >
-              <span className="flex items-center gap-2">
-                <Link2 className="h-3 w-3 md:h-4 md:w-4" />
-                <span className="hidden sm:inline">Link a new account</span>
-                <span className="sm:hidden">Link account</span>
-              </span>
-              <ChevronRight className="h-3 w-3 md:h-4 md:w-4" />
-            </Button>
-
-            <div className="pt-2">
-              <CreditCardDisplay
-                nickname="Evergreen Rewards"
-                last4="4321"
-                holderName="Avery Johnson"
-                issuerText="Evergreen"
-                status="Active"
-              />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+          <p>
+            In the meantime, feel free to explore the UI—everything is wired for authenticated API calls once the data layer is ready.
+          </p>
+        </CardContent>
+      </Card>
     </div>
-  );
+  )
 }

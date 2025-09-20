@@ -4,6 +4,3 @@ dist
 .env.local
 *.log
 /.idea
-/server/venv
-client/package-lock.json
-client/node_modules
