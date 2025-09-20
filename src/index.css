@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222 47% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 10%;
+  --primary: 252 82% 61%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 224 14% 90%;
+  --secondary-foreground: 224 47% 17%;
+  --muted: 220 20% 96%;
+  --muted-foreground: 220 8% 45%;
+  --accent: 152 76% 40%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 4 84% 58%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 221 13% 86%;
+  --input: 221 13% 86%;
+  --ring: 252 82% 61%;
+  --success: 152 76% 40%;
+  --success-foreground: 210 40% 98%;
+  --radius: 1rem;
+}
+
+.dark {
+  --background: 224 53% 7%;
+  --foreground: 210 40% 96%;
+  --card: 222 47% 11%;
+  --card-foreground: 210 40% 96%;
+  --popover: 222 47% 11%;
+  --popover-foreground: 210 40% 96%;
+  --primary: 260 89% 76%;
+  --primary-foreground: 232 50% 18%;
+  --secondary: 223 31% 20%;
+  --secondary-foreground: 210 40% 96%;
+  --muted: 223 31% 20%;
+  --muted-foreground: 215 16% 65%;
+  --accent: 152 76% 40%;
+  --accent-foreground: 210 40% 96%;
+  --destructive: 0 63% 49%;
+  --destructive-foreground: 210 40% 96%;
+  --border: 223 27% 24%;
+  --input: 223 27% 24%;
+  --ring: 260 89% 76%;
+  --success: 152 75% 45%;
+  --success-foreground: 210 40% 98%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply min-h-screen bg-background text-foreground antialiased transition-colors duration-200;
+    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  ::selection {
+    @apply bg-primary/20;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply rounded-2xl border border-white/20 bg-white/90 p-6 shadow-soft backdrop-blur supports-[backdrop-filter]:backdrop-blur-lg dark:border-white/10 dark:bg-zinc-900/60;
+  }
+  .hover-lift {
+    @apply transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
