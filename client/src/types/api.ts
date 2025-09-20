@@ -65,8 +65,14 @@ export type CardRow = {
   mask: string
   type: "credit_card"
   expires?: string | null
-  status: "Active" | "Needs Attention"
+  status: "Active" | "Needs Attention" | "Applied"
   lastSynced?: string | null
+  appliedAt?: string | null
+  cardProductId?: string | null
+  cardProductSlug?: string | null
+  productName?: string | null
+  account_mask?: string | null
+  credit_limit?: number | null
 }
 
 export type CardSummary = {
@@ -80,6 +86,27 @@ export type CardDetails = CardRow & {
   productName?: string
   features?: string[]
   summary?: CardSummary
+}
+
+export type RewardsEstimateCategory = {
+  category: string
+  spend: number
+  rate: number
+  cashback: number
+  transactions: number
+  capMonthly?: number | null
+}
+
+export type RewardsEstimate = {
+  cardId?: string
+  cardSlug?: string | null
+  cardName?: string | null
+  windowDays: number
+  totalCashback: number
+  totalSpend: number
+  effectiveRate: number
+  baseRate: number
+  byCategory: RewardsEstimateCategory[]
 }
 
 export type CreditCardReward = {
@@ -162,11 +189,27 @@ export type RecommendationResponse = {
   explanation: string
 }
 
+export type MandateStatus = "pending_approval" | "approved" | "declined" | "executed"
+
+export type Mandate = {
+  id: string
+  type: "intent" | "cart" | "payment"
+  status: MandateStatus
+  data: Record<string, unknown>
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export type MandateAttachment = Mandate & {
+  context?: Record<string, unknown>
+}
+
 export type ChatMessage = {
   id: string
   author: "user" | "assistant"
   content: string
   timestamp: string
+  mandate?: MandateAttachment
 }
 
 export type ChatResponse = {

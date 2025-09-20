@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { MessageCircle, Send, Sparkles } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -7,14 +8,21 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { useToast } from "@/components/ui/use-toast"
+import { MandateCard } from "@/components/chat/MandateCard"
 import { useChat } from "@/hooks/useChat"
-import type { ChatMessage } from "@/types/api"
+import { approveMandate, declineMandate, executeMandate } from "@/lib/mandates"
+import {
+  FLOW_COACH_MANDATE_EVENT,
+  FLOW_COACH_OPEN_EVENT,
+  notifyMandateResolved,
+  type FlowCoachMandateEventDetail,
+} from "@/lib/flow-coach"
+import type { ChatMessage, MandateAttachment, Mandate } from "@/types/api"
 
 const suggestionChips = [
-  "Why this card?",
-  "3 quick wins",
-  "Summarize 30 days",
-  "How do I lower travel?",
+  "Suggest a monthly budget",
+  "Why did spending rise?",
+  "Find subscriptions",
 ]
 
 function generateId() {
@@ -27,7 +35,8 @@ function generateId() {
 const initialMessage: ChatMessage = {
   id: "welcome",
   author: "assistant",
-  content: "Hey there! Curious about your subscriptions or want three quick wins?",
+  content:
+    "Hey there! I can spot rising spend, draft budgets, or track down subscriptions. Want to try one?",
   timestamp: new Date().toISOString(),
 }
 
@@ -57,11 +66,56 @@ export function ChatWidget() {
   const listRef = useRef<HTMLDivElement | null>(null)
 
   const chatMutation = useChat()
+  const queryClient = useQueryClient()
+  const [actionState, setActionState] = useState<{ id: string; action: "approve" | "decline" } | null>(null)
 
   useEffect(() => {
     if (!open) return
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" })
   }, [messages, open])
+
+  useEffect(() => {
+    const handleOpen = () => setOpen(true)
+    const handleMandate = (event: Event) => {
+      const detail = (event as CustomEvent<FlowCoachMandateEventDetail>).detail
+      if (!detail?.mandate) {
+        return
+      }
+      const productName =
+        (detail.mandate.context?.productName as string) ||
+        (detail.mandate.data?.product_name as string) ||
+        (detail.mandate.data?.productName as string) ||
+        "this card"
+      const messageText =
+        detail.message ||
+        `Approve the mandate to apply for ${productName}.`
+      const assistantMessage: ChatMessage = {
+        ...createAssistantMessage(messageText),
+        mandate: detail.mandate,
+      }
+      setMessages((prev) => [...prev, assistantMessage])
+      setOpen(true)
+    }
+
+    window.addEventListener(FLOW_COACH_OPEN_EVENT, handleOpen)
+    window.addEventListener(FLOW_COACH_MANDATE_EVENT, handleMandate as EventListener)
+
+    return () => {
+      window.removeEventListener(FLOW_COACH_OPEN_EVENT, handleOpen)
+      window.removeEventListener(FLOW_COACH_MANDATE_EVENT, handleMandate as EventListener)
+    }
+  }, [])
+
+  const updateMandateOnMessage = (mandateId: string, updater: (mandate: MandateAttachment) => MandateAttachment) => {
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (!message.mandate || message.mandate.id !== mandateId) {
+          return message
+        }
+        return { ...message, mandate: updater(message.mandate) }
+      }),
+    )
+  }
 
   const isThinking = chatMutation.isPending
 
@@ -97,6 +151,65 @@ export function ChatWidget() {
         },
       },
     )
+  }
+
+  const handleApprove = async (mandate: MandateAttachment) => {
+    if (actionState) return
+    setActionState({ id: mandate.id, action: "approve" })
+    const originalStatus = mandate.status
+    try {
+      updateMandateOnMessage(mandate.id, (prev) => ({ ...prev, status: "approved" }))
+      await approveMandate(mandate.id, mandate as Mandate)
+      const executed = await executeMandate(mandate.id)
+      updateMandateOnMessage(mandate.id, (prev) => ({
+        ...prev,
+        status: executed.status ?? "executed",
+        updatedAt: executed.updated_at ?? prev.updatedAt ?? null,
+      }))
+      queryClient.invalidateQueries({ queryKey: ["cards"] })
+      toast({
+        title: "Application submitted",
+        description: "We’ll refresh your linked cards shortly.",
+      })
+      setMessages((prev) => [
+        ...prev,
+        createAssistantMessage(
+          `Done! ${mandate.context?.productName ?? "Your application"} is marked as applied.`,
+        ),
+      ])
+      notifyMandateResolved({ id: mandate.id, status: "executed" })
+    } catch (error) {
+      updateMandateOnMessage(mandate.id, (prev) => ({ ...prev, status: originalStatus }))
+      toast({
+        title: "Unable to complete mandate",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    } finally {
+      setActionState(null)
+    }
+  }
+
+  const handleDecline = async (mandate: MandateAttachment) => {
+    if (actionState) return
+    setActionState({ id: mandate.id, action: "decline" })
+    try {
+      const declined = await declineMandate(mandate.id, mandate as Mandate)
+      updateMandateOnMessage(mandate.id, () => ({ ...mandate, status: declined.status }))
+      toast({
+        title: "Mandate declined",
+        description: "Flow Coach will skip this request.",
+      })
+      setMessages((prev) => [...prev, createAssistantMessage("Got it—no action taken." )])
+      notifyMandateResolved({ id: mandate.id, status: "declined" })
+    } catch (error) {
+      updateMandateOnMessage(mandate.id, () => mandate)
+      toast({
+        title: "Unable to decline",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    } finally {
+      setActionState(null)
+    }
   }
 
   return (
@@ -139,18 +252,38 @@ export function ChatWidget() {
                 ref={listRef}
                 className="glass-panel flex-1 space-y-4 overflow-y-auto rounded-3xl border border-border/60 bg-white/70 p-6 dark:bg-zinc-900/60"
               >
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={
-                      message.author === "assistant"
-                        ? "max-w-[80%] rounded-3xl bg-primary/10 p-4 text-sm"
-                        : "ml-auto max-w-[80%] rounded-3xl bg-primary p-4 text-sm text-primary-foreground shadow-soft"
-                    }
-                  >
-                    {message.content}
-                  </div>
-                ))}
+                {messages.map((message) => {
+                  if (message.mandate) {
+                    return (
+                      <div key={message.id} className="flex flex-col items-start gap-3">
+                        {message.content ? (
+                          <div className="max-w-[80%] rounded-3xl bg-primary/10 p-4 text-sm">
+                            {message.content}
+                          </div>
+                        ) : null}
+                        <MandateCard
+                          mandate={message.mandate}
+                          onApprove={() => handleApprove(message.mandate!)}
+                          onDecline={() => handleDecline(message.mandate!)}
+                          isProcessing={actionState?.id === message.mandate.id}
+                        />
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div
+                      key={message.id}
+                      className={
+                        message.author === "assistant"
+                          ? "max-w-[80%] rounded-3xl bg-primary/10 p-4 text-sm"
+                          : "ml-auto max-w-[80%] rounded-3xl bg-primary p-4 text-sm text-primary-foreground shadow-soft"
+                      }
+                    >
+                      {message.content}
+                    </div>
+                  )
+                })}
                 {isThinking ? (
                   <div className="max-w-[80%] rounded-3xl bg-primary/10 p-4 text-xs text-muted-foreground">
                     Flow Coach is thinking…

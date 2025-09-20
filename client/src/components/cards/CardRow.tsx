@@ -1,6 +1,8 @@
-import { KeyboardEvent } from "react"
-import { Button } from "@/components/ui/button"
+import type { KeyboardEvent } from "react"
 import { Pencil, Trash2 } from "lucide-react"
+
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import type { CardRow as CardRowType } from "@/types/api"
 
 type Props = {
@@ -53,9 +55,15 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
                         <span className="truncate text-xs text-muted-foreground">• {issuerNet}</span>
                     ) : null}
                     {card.status ? (
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-              {card.status}
-            </span>
+                        card.status === "Applied" ? (
+                            <Badge variant="success" className="px-2 py-0.5 text-[10px] uppercase">
+                                Applied
+                            </Badge>
+                        ) : (
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                {card.status}
+                            </span>
+                        )
                     ) : null}
                 </div>
 

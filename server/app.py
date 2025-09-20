@@ -14,6 +14,7 @@ import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
 from llm.gemini import explain_recommendations, generate_chat_response
+from services.rewards import compute_month_earnings, normalize_mix
 from services.scoring import score_catalog
 from services.spend import aggregate_spend_details, build_category_rules, compute_user_mix, load_transactions
 
@@ -155,6 +156,19 @@ def ensure_indexes(database) -> None:
         name="userId_1_account_type_1_account_mask_1",
     )
 
+    # allow quick lookup for cards created from mandates
+    safe_create_index(
+        accounts,
+        [("userId", ASCENDING), ("card_product_id", ASCENDING)],
+        sparse=True,
+    )
+
+    safe_create_index(
+        accounts,
+        [("userId", ASCENDING), ("card_product_slug", ASCENDING)],
+        sparse=True,
+    )
+
     # transactions
     tx = database["transactions"]
     safe_create_index(tx, [("userId", ASCENDING), ("date", DESCENDING)])
@@ -166,7 +180,21 @@ def ensure_indexes(database) -> None:
     # IMPORTANT: your working monolith uses slug (NOT product_slug) and named slug_1
     safe_create_index(cards, [("slug", ASCENDING)], unique=True, name="slug_1")
 
-    # add others here only if you actually use them (merchants, applications, etc.)
+    # applications
+    applications = database["applications"]
+    safe_create_index(
+        applications,
+        [("userId", ASCENDING), ("product_slug", ASCENDING)],
+        unique=True,
+        sparse=True,
+    )
+
+    # mandates
+    mandates = database["mandates"]
+    safe_create_index(
+        mandates,
+        [("userId", ASCENDING), ("created_at", DESCENDING)],
+    )
 
 
 def ensure_collections(database) -> None:
@@ -176,6 +204,12 @@ def ensure_collections(database) -> None:
     if "applications" not in existing:
         try:
             database.create_collection("applications")
+        except CollectionInvalid:
+            pass
+
+    if "mandates" not in existing:
+        try:
+            database.create_collection("mandates")
         except CollectionInvalid:
             pass
 
@@ -266,6 +300,30 @@ def format_card_row(doc: Dict[str, Any]) -> Dict[str, Any]:
     if doc.get("expiry_year") and doc.get("expiry_month"):
         expires = f"{int(doc['expiry_year']):04d}-{int(doc['expiry_month']):02d}"
     last_sync = doc.get("last_sync")
+    applied_at = doc.get("applied_at")
+    if isinstance(applied_at, datetime):
+        applied_at_value: Optional[str] = applied_at.isoformat().replace("+00:00", "Z")
+    else:
+        applied_at_value = str(applied_at) if applied_at else None
+
+    card_product_id = doc.get("card_product_id")
+    if isinstance(card_product_id, ObjectId):
+        card_product_id_value: Optional[str] = str(card_product_id)
+    elif isinstance(card_product_id, str) and card_product_id:
+        card_product_id_value = card_product_id
+    else:
+        card_product_id_value = None
+
+    card_product_slug = (
+        doc.get("card_product_slug")
+        or doc.get("product_slug")
+        or doc.get("card_slug")
+    )
+    if isinstance(card_product_slug, str) and card_product_slug.strip():
+        card_product_slug_value: Optional[str] = card_product_slug.strip()
+    else:
+        card_product_slug_value = None
+
     return {
         "id": str(doc["_id"]),
         "nickname": doc.get("nickname") or doc.get("issuer") or "Card",
@@ -276,6 +334,26 @@ def format_card_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         "expires": expires,
         "status": doc.get("status", "Active"),
         "lastSynced": last_sync.isoformat().replace("+00:00", "Z") if isinstance(last_sync, datetime) else None,
+        "appliedAt": applied_at_value,
+        "cardProductId": card_product_id_value,
+        "cardProductSlug": card_product_slug_value,
+    }
+
+
+def format_mandate(doc: Dict[str, Any]) -> Dict[str, Any]:
+    created_at = doc.get("created_at")
+    updated_at = doc.get("updated_at")
+    return {
+        "id": str(doc["_id"]),
+        "type": doc.get("type", ""),
+        "status": doc.get("status", "pending_approval"),
+        "data": doc.get("data", {}),
+        "created_at": created_at.isoformat().replace("+00:00", "Z")
+        if isinstance(created_at, datetime)
+        else None,
+        "updated_at": updated_at.isoformat().replace("+00:00", "Z")
+        if isinstance(updated_at, datetime)
+        else None,
     }
 
 
@@ -925,30 +1003,325 @@ def create_app() -> Flask:
             }
         )
 
+    @api_bp.post("/ap2/mandates")
+    def ap2_create_mandate():
+        user = g.current_user
+        payload = request.get_json(force=True) or {}
+
+        raw_type = payload.get("type")
+        if not isinstance(raw_type, str) or not raw_type.strip():
+            raise BadRequest("type is required")
+        mandate_type = raw_type.strip().lower()
+        if mandate_type not in ("intent", "cart", "payment"):
+            raise BadRequest("invalid type")
+
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            raise BadRequest("data must be an object")
+
+        now = datetime.utcnow()
+        document = {
+            "userId": user["_id"],
+            "type": mandate_type,
+            "data": data,
+            "status": "pending_approval",
+            "signed_by": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        result = database["mandates"].insert_one(document)
+        created = database["mandates"].find_one({"_id": result.inserted_id})
+        if created is None:
+            raise BadRequest("Unable to create mandate")
+        return jsonify(format_mandate(created)), 201
+
+    @api_bp.post("/ap2/mandates/<mandate_id>/approve")
+    def ap2_approve_mandate(mandate_id: str):
+        user = g.current_user
+        object_id = validate_object_id(mandate_id)
+        mandate = database["mandates"].find_one({"_id": object_id, "userId": user["_id"]})
+        if not mandate:
+            raise NotFound("Mandate not found")
+
+        status = mandate.get("status")
+        if status in ("approved", "executed"):
+            return jsonify({"id": mandate_id, "status": status})
+        if status == "declined":
+            raise BadRequest("mandate was declined")
+
+        now = datetime.utcnow()
+        database["mandates"].update_one(
+            {"_id": mandate["_id"]},
+            {
+                "$set": {"status": "approved", "updated_at": now},
+                "$push": {"signed_by": {"userId": user["_id"], "at": now}},
+            },
+        )
+        updated = database["mandates"].find_one({"_id": mandate["_id"]})
+        return jsonify({"id": mandate_id, "status": "approved", "updated_at": format_mandate(updated)["updated_at"]})
+
+    @api_bp.post("/ap2/mandates/<mandate_id>/decline")
+    def ap2_decline_mandate(mandate_id: str):
+        user = g.current_user
+        object_id = validate_object_id(mandate_id)
+        mandate = database["mandates"].find_one({"_id": object_id, "userId": user["_id"]})
+        if not mandate:
+            raise NotFound("Mandate not found")
+
+        if mandate.get("status") == "executed":
+            raise BadRequest("mandate already executed")
+
+        now = datetime.utcnow()
+        database["mandates"].update_one(
+            {"_id": mandate["_id"]},
+            {"$set": {"status": "declined", "updated_at": now}},
+        )
+        return jsonify({"id": mandate_id, "status": "declined"})
+
+    def _lookup_credit_card_by_reference(slug: Optional[str], product_id: Any):
+        if slug:
+            product = database["credit_cards"].find_one({"slug": slug})
+            if product:
+                return product
+        if isinstance(product_id, ObjectId):
+            product = database["credit_cards"].find_one({"_id": product_id})
+            if product:
+                return product
+        if isinstance(product_id, str) and product_id:
+            # try string representation of object id first
+            try:
+                object_id = ObjectId(product_id)
+                product = database["credit_cards"].find_one({"_id": object_id})
+                if product:
+                    return product
+            except Exception:
+                pass
+            product = database["credit_cards"].find_one({"slug": product_id})
+            if product:
+                return product
+        return None
+
+    @api_bp.post("/ap2/mandates/<mandate_id>/execute")
+    def ap2_execute_mandate(mandate_id: str):
+        user = g.current_user
+        object_id = validate_object_id(mandate_id)
+        mandate = database["mandates"].find_one({"_id": object_id, "userId": user["_id"]})
+        if not mandate:
+            raise NotFound("Mandate not found")
+
+        if mandate.get("status") != "approved":
+            raise BadRequest("mandate not approved")
+
+        mandate_type = (mandate.get("type") or "").lower()
+        payload = mandate.get("data") or {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        intent = (payload.get("intent") or payload.get("type") or "").lower()
+
+        if mandate_type == "intent" and intent == "apply_card":
+            slug_value = None
+            for key in ("product_slug", "slug"):
+                candidate = payload.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    slug_value = candidate.strip()
+                    break
+            if not slug_value:
+                raise BadRequest("product_slug required")
+
+            product = _lookup_credit_card_by_reference(slug_value, payload.get("card_product_id"))
+            if not product:
+                raise BadRequest("unknown product_slug")
+
+            now = datetime.utcnow()
+
+            application = database["applications"].find_one(
+                {
+                    "userId": user["_id"],
+                    "product_slug": slug_value,
+                }
+            )
+
+            product_name = payload.get("product_name") or product.get("product_name")
+            issuer_name = payload.get("issuer") or product.get("issuer")
+
+            application_updates = {
+                "product_name": product_name,
+                "issuer": issuer_name,
+                "card_product_id": product.get("_id"),
+                "updated_at": now,
+                "status": "approved",
+            }
+
+            if application:
+                database["applications"].update_one(
+                    {"_id": application["_id"]},
+                    {
+                        "$set": {**application_updates, "applied_at": now},
+                        "$setOnInsert": {"created_at": now},
+                    },
+                )
+            else:
+                application_document = {
+                    "userId": user["_id"],
+                    "product_slug": slug_value,
+                    "status": "approved",
+                    "created_at": now,
+                    "updated_at": now,
+                    "applied_at": now,
+                    "product_name": product_name,
+                    "issuer": issuer_name,
+                    "card_product_id": product.get("_id"),
+                }
+                database["applications"].insert_one(application_document)
+
+            account_matchers: List[Any] = []
+            product_id = product.get("_id")
+            if product_id:
+                account_matchers.append({"card_product_id": product_id})
+                account_matchers.append({"card_product_id": str(product_id)})
+            account_matchers.append({"card_product_slug": slug_value})
+
+            existing_account = database["accounts"].find_one(
+                {
+                    "userId": user["_id"],
+                    "account_type": "credit_card",
+                    "$or": account_matchers,
+                }
+            )
+
+            account_updates = {
+                "issuer": issuer_name,
+                "network": product.get("network"),
+                "nickname": product_name,
+                "card_product_id": product_id,
+                "card_product_slug": product.get("slug"),
+                "status": "Applied",
+                "applied_at": now,
+                "updated_at": now,
+            }
+
+            if existing_account:
+                database["accounts"].update_one(
+                    {"_id": existing_account["_id"]},
+                    {"$set": account_updates, "$setOnInsert": {"created_at": existing_account.get("created_at", now)}},
+                )
+            else:
+                account_document = {
+                    "userId": user["_id"],
+                    "account_type": "credit_card",
+                    "issuer": issuer_name,
+                    "network": product.get("network"),
+                    "nickname": product_name,
+                    "account_mask": "",
+                    "card_product_id": product_id,
+                    "card_product_slug": product.get("slug"),
+                    "status": "Applied",
+                    "applied_at": now,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                database["accounts"].insert_one(account_document)
+
+            database["mandates"].update_one(
+                {"_id": mandate["_id"]},
+                {"$set": {"status": "executed", "updated_at": now}},
+            )
+
+            return jsonify({"id": mandate_id, "status": "executed", "result": "card_applied"})
+
+        raise BadRequest("no executor for this mandate")
+
     @api_bp.post("/applications")
     def create_application():
         user = g.current_user
         payload = request.get_json(force=True) or {}
 
         slug = payload.get("slug")
+        product_slug = payload.get("product_slug") or payload.get("productSlug")
         product_name = payload.get("product_name")
         issuer = payload.get("issuer")
+        card_id_raw = payload.get("card_id") or payload.get("cardId")
 
-        if not isinstance(slug, str) or not slug.strip():
-            raise BadRequest("slug is required")
+        card_object_id: Optional[ObjectId] = None
+        card_doc: Optional[Dict[str, Any]] = None
+
+        if card_id_raw:
+            try:
+                card_object_id = validate_object_id(str(card_id_raw))
+            except NotFound as exc:
+                raise BadRequest("Invalid card_id format") from exc
+
+            card_doc = database["accounts"].find_one(
+                {
+                    "_id": card_object_id,
+                    "userId": user["_id"],
+                    "account_type": "credit_card",
+                }
+            )
+            if not card_doc:
+                raise NotFound("Card not found")
+
+        slug_value: Optional[str] = None
+        for candidate in (slug, product_slug):
+            if isinstance(candidate, str) and candidate.strip():
+                slug_value = candidate.strip()
+                break
+
+        if not slug_value and card_doc:
+            product_ref = card_doc.get("card_product_id") or card_doc.get("product_slug")
+            if isinstance(product_ref, ObjectId):
+                product_ref = str(product_ref)
+            if isinstance(product_ref, str) and product_ref.strip():
+                slug_value = product_ref.strip()
+
+        catalog_product: Optional[Dict[str, Any]] = None
+        if slug_value:
+            catalog_product = database["credit_cards"].find_one({"slug": slug_value})
+
+        if not catalog_product and card_doc:
+            product_ref = card_doc.get("card_product_id")
+            if isinstance(product_ref, ObjectId):
+                catalog_product = database["credit_cards"].find_one({"_id": product_ref})
+            elif isinstance(product_ref, str) and product_ref.strip():
+                catalog_product = database["credit_cards"].find_one({"slug": product_ref.strip()})
+
+        if not slug_value and catalog_product:
+            slug_candidate = catalog_product.get("slug") or catalog_product.get("product_slug")
+            if isinstance(slug_candidate, str) and slug_candidate.strip():
+                slug_value = slug_candidate.strip()
+
+        if not slug_value:
+            raise BadRequest("Provide card_id or product_slug")
+
+        if card_doc and not product_name:
+            product_name = card_doc.get("productName") or card_doc.get("nickname")
+        if card_doc and not issuer:
+            issuer = card_doc.get("issuer")
+
+        if catalog_product:
+            product_name = product_name or catalog_product.get("product_name")
+            issuer = issuer or catalog_product.get("issuer")
+
         if not isinstance(product_name, str) or not product_name.strip():
             raise BadRequest("product_name is required")
         if not isinstance(issuer, str) or not issuer.strip():
             raise BadRequest("issuer is required")
 
-        document = {
+        document: Dict[str, Any] = {
             "userId": user["_id"],
-            "product_slug": slug.strip(),
+            "product_slug": slug_value,
             "product_name": product_name.strip(),
             "issuer": issuer.strip(),
             "status": "started",
             "applied_at": datetime.utcnow(),
         }
+
+        if catalog_product and catalog_product.get("network"):
+            document["network"] = catalog_product.get("network")
+        if card_object_id is not None:
+            document["card_id"] = card_object_id
 
         result = database["applications"].insert_one(document)
 
@@ -1022,6 +1395,132 @@ def create_app() -> Flask:
         timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
         return jsonify({"reply": response_text, "timestamp": timestamp})
+
+    @api_bp.get("/rewards/estimate")
+    def rewards_estimate():
+        user = g.current_user
+        window_days = parse_window_days(30)
+
+        slug_param = request.args.get("cardSlug") or request.args.get("slug")
+        card_id_param = request.args.get("cardId")
+
+        account = None
+        product = None
+
+        if card_id_param:
+            try:
+                card_object_id = validate_object_id(card_id_param)
+            except NotFound as exc:
+                raise BadRequest("invalid cardId") from exc
+            account = database["accounts"].find_one(
+                {
+                    "_id": card_object_id,
+                    "userId": user["_id"],
+                    "account_type": "credit_card",
+                }
+            )
+            if not account:
+                raise NotFound("Card not found")
+            if not slug_param:
+                slug_param = account.get("card_product_slug") or account.get("product_slug")
+            product = _lookup_credit_card_by_reference(slug_param, account.get("card_product_id"))
+
+        if slug_param and not product:
+            product = _lookup_credit_card_by_reference(slug_param, None)
+
+        if not product and slug_param:
+            raise NotFound("Card product not found")
+
+        if not product and account:
+            product = _lookup_credit_card_by_reference(account.get("card_product_slug"), account.get("card_product_id"))
+
+        if not product:
+            raise BadRequest("cardSlug required")
+
+        card_object_ids = None
+        if account:
+            card_object_ids = [account["_id"]]
+
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+        rewards = compute_month_earnings(product, transactions)
+
+        response = {
+            "windowDays": window_days,
+            "cardSlug": product.get("slug"),
+            "cardName": product.get("product_name"),
+            "totalCashback": rewards.get("total_cashback", 0.0),
+            "totalSpend": rewards.get("total_spend", 0.0),
+            "effectiveRate": rewards.get("effective_rate", 0.0),
+            "baseRate": rewards.get("base_rate", 0.0),
+            "byCategory": rewards.get("by_category", []),
+        }
+
+        if account:
+            response["cardId"] = str(account["_id"])
+
+        return jsonify(response)
+
+    @api_bp.post("/rewards/compare")
+    def rewards_compare():
+        g.current_user  # ensure auth
+        payload = request.get_json(force=True) or {}
+
+        raw_mix = payload.get("mix") or payload.get("category_mix") or {}
+        if not isinstance(raw_mix, dict):
+            raise BadRequest("mix must be an object")
+
+        mix, total = normalize_mix(raw_mix)
+
+        try:
+            window_days = int(payload.get("window") or payload.get("windowDays") or 30)
+        except (TypeError, ValueError):
+            window_days = 30
+        if window_days <= 0:
+            window_days = 30
+
+        cards_payload = payload.get("cards") or []
+        if not isinstance(cards_payload, list):
+            raise BadRequest("cards must be an array")
+
+        slugs: List[str] = []
+        for entry in cards_payload:
+            if isinstance(entry, str) and entry.strip():
+                slugs.append(entry.strip())
+            elif isinstance(entry, dict):
+                slug_value = entry.get("slug") or entry.get("cardSlug")
+                if isinstance(slug_value, str) and slug_value.strip():
+                    slugs.append(slug_value.strip())
+
+        if not slugs or not mix or total <= 0:
+            return jsonify(
+                {
+                    "mix": mix,
+                    "monthly_spend": round(total, 2),
+                    "windowDays": window_days,
+                    "cards": [],
+                }
+            )
+
+        catalog_cards = list(database["credit_cards"].find({"slug": {"$in": slugs}}))
+        if not catalog_cards:
+            return jsonify(
+                {
+                    "mix": mix,
+                    "monthly_spend": round(total, 2),
+                    "windowDays": window_days,
+                    "cards": [],
+                }
+            )
+
+        scored = score_catalog(catalog_cards, mix, total, window_days, limit=len(catalog_cards))
+        return jsonify(
+            {
+                "mix": mix,
+                "monthly_spend": round(total, 2),
+                "windowDays": window_days,
+                "cards": scored,
+            }
+        )
 
     @api_bp.get("/cards")
     def list_cards():
