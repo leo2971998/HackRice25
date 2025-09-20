@@ -27,6 +27,29 @@ export type MerchantRow = {
   logoUrl?: string
 }
 
+export type SpendDetailCategory = {
+  key: string
+  amount: number
+  count: number
+  pct: number
+}
+
+export type SpendDetailMerchant = {
+  name: string
+  category: string
+  amount: number
+  count: number
+  logoUrl?: string
+}
+
+export type SpendDetails = {
+  windowDays: number
+  total: number
+  transactionCount: number
+  categories: SpendDetailCategory[]
+  merchants: SpendDetailMerchant[]
+}
+
 export type MoneyMoment = {
   id: string
   title: string
@@ -57,4 +80,84 @@ export type CardDetails = CardRow & {
   productName?: string
   features?: string[]
   summary?: CardSummary
+}
+
+export type CreditCardReward = {
+  category: string
+  rate: number
+  cap_monthly?: number | null
+}
+
+export type WelcomeOffer = {
+  bonus_value_usd?: number
+  min_spend?: number
+  window_days?: number
+} | null
+
+export type CreditCardProduct = {
+  id: string | null
+  slug: string
+  product_name: string
+  issuer: string
+  network?: string | null
+  annual_fee: number
+  base_cashback: number
+  rewards: CreditCardReward[]
+  welcome_offer: WelcomeOffer
+  foreign_tx_fee: number
+  link_url?: string | null
+  active: boolean
+  last_updated?: string | null
+}
+
+export type RecommendationBonusBreakdown = {
+  category: string
+  rate: number
+  cap_monthly?: number | null
+  eligible_spend_monthly: number
+  monthly_amount: number
+  annual_amount: number
+}
+
+export type RecommendationBreakdown = {
+  monthly_spend: number
+  base: {
+    rate: number
+    monthly_amount: number
+    annual_amount: number
+  }
+  bonuses: RecommendationBonusBreakdown[]
+  welcome: {
+    value: number
+    min_spend?: number
+    window_days?: number
+  } | null
+}
+
+export type RecommendationCard = {
+  id: string | null
+  slug?: string | null
+  product_name?: string
+  issuer?: string
+  network?: string | null
+  link_url?: string | null
+  foreign_tx_fee?: number | null
+  base_cashback: number
+  annual_fee: number
+  annual_reward: number
+  monthly_reward: number
+  net: number
+  active: boolean
+  rewards: CreditCardReward[]
+  welcome_offer: WelcomeOffer
+  breakdown: RecommendationBreakdown
+  highlights: string[]
+}
+
+export type RecommendationResponse = {
+  mix: Record<string, number>
+  monthly_spend: number
+  windowDays: number
+  cards: RecommendationCard[]
+  explanation: string
 }

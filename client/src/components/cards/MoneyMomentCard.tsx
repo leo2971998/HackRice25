@@ -17,12 +17,12 @@ export type MoneyMomentCardProps = {
 
 export function MoneyMomentCard({ moment }: MoneyMomentCardProps) {
   return (
-    <Card className="hover-lift h-full rounded-3xl bg-white/90 p-4 dark:bg-zinc-900/60">
+    <Card className="hover-lift h-full rounded-3xl bg-white/90 p-5 dark:bg-zinc-900/60 md:p-6">
       <CardContent className="flex h-full flex-col justify-between space-y-4 p-0">
         <div className="flex items-center gap-2 text-primary">{ICON_MAP[moment.type]}</div>
         <div className="space-y-1">
-          <p className="text-sm font-semibold text-foreground">{moment.title}</p>
-          <p className="text-xs text-muted-foreground">{moment.body}</p>
+          <p className="text-sm font-semibold text-foreground md:text-base">{moment.title}</p>
+          <p className="text-xs text-muted-foreground md:text-sm">{moment.body}</p>
         </div>
       </CardContent>
     </Card>
