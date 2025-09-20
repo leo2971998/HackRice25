@@ -10,6 +10,7 @@ from jose.exceptions import JWTError
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.errors import DuplicateKeyError
+from pymongo.errors import OperationFailure
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
@@ -32,6 +33,20 @@ DEFAULT_PREFERENCES: Dict[str, Any] = {
     "notifications": {"monthly_summary": True, "new_recommendation": True},
 }
 
+
+
+def safe_create_index(coll, keys, **opts):
+    """
+    Create an index but gracefully ignore Mongo's
+    IndexOptionsConflict (code 85), which occurs when an index with
+    the same key pattern exists under a different name/options.
+    """
+    try:
+        return coll.create_index(keys, **opts)
+    except OperationFailure as e:
+        if getattr(e, "code", None) == 85:  # IndexOptionsConflict
+            return None
+        raise
 
 def load_environment() -> None:
     if load_dotenv is not None:
@@ -115,32 +130,45 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
 
 
 def ensure_indexes(database) -> None:
+    """
+    Build the same logical indexes your app expects, but:
+    - use deterministic names where you already have custom ones, and
+    - ignore 'already exists with different name' conflicts.
+    """
+    # users
     users = database["users"]
-    # Omit custom names so we don't conflict with existing auto names like `auth0_id_1`, `email_1`
-    users.create_index([("auth0_id", ASCENDING)], unique=True)
-    users.create_index([("email", ASCENDING)], unique=True, sparse=True)
+    # unique auth0_id (simple, no partials/sparse mixing)
+    safe_create_index(users, [("auth0_id", ASCENDING)], unique=True)
+    # unique email but allow many null/missing (use sparse like your working file)
+    safe_create_index(users, [("email", ASCENDING)], unique=True, sparse=True)
 
+    # accounts
     accounts = database["accounts"]
-    accounts.create_index([("userId", ASCENDING)])
-    # Match existing composite index EXACTLY (includes sparse + name)
-    accounts.create_index(
+    # your DB already had this as "accounts_userId", so match it explicitly
+    safe_create_index(accounts, [("userId", ASCENDING)], name="accounts_userId")
+
+    # composite unique+sparse index your monolith matched exactly by name
+    safe_create_index(
+        accounts,
         [("userId", ASCENDING), ("account_type", ASCENDING), ("account_mask", ASCENDING)],
         unique=True,
         sparse=True,
         name="userId_1_account_type_1_account_mask_1",
     )
 
-    transactions = database["transactions"]
-    transactions.create_index([("userId", ASCENDING), ("date", DESCENDING)])
-    transactions.create_index([("userId", ASCENDING), ("accountId", ASCENDING), ("date", DESCENDING)])
+    # transactions
+    tx = database["transactions"]
+    safe_create_index(tx, [("userId", ASCENDING), ("date", DESCENDING)])
+    safe_create_index(tx, [("userId", ASCENDING), ("accountId", ASCENDING), ("date", DESCENDING)])
 
-    credit_cards = database["credit_cards"]
-    credit_cards.create_index([("issuer", ASCENDING), ("network", ASCENDING)])
-    credit_cards.create_index([("slug", ASCENDING)], unique=True, name="slug_1")
+    # credit_cards
+    cards = database["credit_cards"]
+    safe_create_index(cards, [("issuer", ASCENDING), ("network", ASCENDING)])
+    # IMPORTANT: your working monolith uses slug (NOT product_slug) and named slug_1
+    safe_create_index(cards, [("slug", ASCENDING)], unique=True, name="slug_1")
 
-    merchants = database["merchants"]
-    merchants.create_index([("name", ASCENDING)])
-    merchants.create_index([("slug", ASCENDING)])
+    # add others here only if you actually use them (merchants, applications, etc.)
+
 
 
 def merge_preferences(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:

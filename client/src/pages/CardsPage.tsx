@@ -12,7 +12,6 @@ import { CreditCardDisplay } from "@/components/cards/CreditCardDisplay"
 
 import { AddCardDialog } from "@/components/cards/AddCardDialog"
 import { EditCardDialog } from "@/components/cards/EditCardDialog"
-import { ImportCardDialog } from "@/components/cards/ImportCardDialog"
 
 import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/lib/api-client"
@@ -65,10 +64,7 @@ export default function CardsPage() {
 
     const [dialogOpen, setDialogOpen] = useState(false)
     const [editDialogOpen, setEditDialogOpen] = useState(false)
-    const [importDialogOpen, setImportDialogOpen] = useState(false)
     const [editingCard, setEditingCard] = useState<CardRowType | null>(null)
-    const [debugInfo, setDebugInfo] = useState<any>(null)
-    const [showDebug, setShowDebug] = useState(false)
 
     const summary = cardDetails.data?.summary
     const donutData = useMemo(() => summary?.byCategory ?? [], [summary])
@@ -79,18 +75,6 @@ export default function CardsPage() {
         if (card) {
             setEditingCard(card)
             setEditDialogOpen(true)
-        }
-    }
-    const handleDebug = async () => {
-        try {
-            const result = await apiFetch("/cards/debug")
-            setDebugInfo(result)
-            setShowDebug(true)
-        } catch (error) {
-            toast({
-                title: "Debug failed",
-                description: error instanceof Error ? error.message : "Unable to fetch debug info",
-            })
         }
     }
 
@@ -133,7 +117,7 @@ export default function CardsPage() {
     // pagination
     const [page, setPage] = useState(1)
     useEffect(() => {
-        setPage(1) // reset to first page on filter changes
+        setPage(1)
     }, [issuerFilter, categoryFilter, annualFeeFilter, catalogCards.length])
 
     const totalPages = Math.max(1, Math.ceil(filteredCatalog.length / PAGE_SIZE))
@@ -184,114 +168,110 @@ export default function CardsPage() {
 
             {/* Linked cards */}
             {activeTab === "linked" ? (
-                <div className="space-y-6">
-                    <div className="flex flex-col gap-6 md:flex-row">
-                        <div className="md:w-5/12 space-y-4">
-                            <CardSelector
-                                cards={cards}
-                                selectedId={selectedId}
-                                onSelect={setSelectedId}
-                                onDelete={handleDelete}
-                                onEdit={handleEdit}
-                                onAdd={() => setDialogOpen(true)}
-                                isLoading={cardsQuery.isLoading}
-                                heightClass="max-h-[780px]"
-                            />
-                        </div>
+                cards.length === 0 ? (
+                    // ---------- SINGLE empty state with ONE CTA ----------
+                    <div className="space-y-6">
+                        <Card className="rounded-3xl">
+                            <CardHeader>
+                                <CardTitle className="text-lg font-semibold">No cards yet</CardTitle>
+                                <CardDescription>Add your first card to unlock tailored coaching and spend insights.</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <Button onClick={() => setDialogOpen(true)} className="w-full sm:w-auto">
+                                    Add card
+                                </Button>
+                            </CardContent>
+                        </Card>
 
-                        <div className="md:w-7/12 space-y-4">
-                            {cardDetails.isLoading ? (
-                                <Card className="rounded-3xl">
-                                    <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-                                        Loading card details…
-                                    </CardContent>
-                                </Card>
-                            ) : cardDetails.data ? (
-                                <>
-                                    <CreditCardDisplay card={cardDetails.data} />
+                        <AddCardDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+                    </div>
+                ) : (
+                    // ---------- Two-column view only AFTER you have at least one card ----------
+                    <div className="space-y-6">
+                        <div className="flex flex-col gap-6 md:flex-row">
+                            <div className="md:w-5/12 space-y-4">
+                                <CardSelector
+                                    cards={cards}
+                                    selectedId={selectedId}
+                                    onSelect={setSelectedId}
+                                    onDelete={handleDelete}
+                                    onEdit={handleEdit}
+                                    onAdd={() => setDialogOpen(true)}
+                                    isLoading={cardsQuery.isLoading}
+                                    heightClass="max-h-[780px]"
+                                />
+                            </div>
 
-                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                                        <StatTile label="30-day spend" value={currency2.format(summary?.spend ?? 0)} />
-                                        <StatTile label="Transactions" value={(summary?.txns ?? 0).toLocaleString()} />
-                                        <StatTile
-                                            label="Status"
-                                            value={cardDetails.data.status}
-                                            caption={
-                                                cardDetails.data.lastSynced
-                                                    ? `Synced ${new Date(cardDetails.data.lastSynced).toLocaleDateString()}`
-                                                    : undefined
-                                            }
-                                        />
-                                    </div>
-
+                            <div className="md:w-7/12 space-y-4">
+                                {cardDetails.isLoading ? (
                                     <Card className="rounded-3xl">
-                                        <CardHeader>
-                                            <CardTitle className="text-lg font-semibold">Category breakdown</CardTitle>
-                                            <CardDescription>Last 30 days</CardDescription>
-                                        </CardHeader>
-                                        <CardContent className="h-64 p-0">
-                                            <DonutChart
-                                                data={donutData}
-                                                isLoading={cardDetails.isLoading}
-                                                emptyMessage="No spending yet in the last 30 days."
-                                            />
+                                        <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+                                            Loading card details…
                                         </CardContent>
                                     </Card>
+                                ) : cardDetails.data ? (
+                                    <>
+                                        <CreditCardDisplay card={cardDetails.data} />
 
-                                    {cardDetails.data.features?.length ? (
+                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                                            <StatTile label="30-day spend" value={currency2.format(summary?.spend ?? 0)} />
+                                            <StatTile label="Transactions" value={(summary?.txns ?? 0).toLocaleString()} />
+                                            <StatTile
+                                                label="Status"
+                                                value={cardDetails.data.status}
+                                                caption={
+                                                    cardDetails.data.lastSynced
+                                                        ? `Synced ${new Date(cardDetails.data.lastSynced).toLocaleDateString()}`
+                                                        : undefined
+                                                }
+                                            />
+                                        </div>
+
                                         <Card className="rounded-3xl">
                                             <CardHeader>
-                                                <CardTitle className="text-lg font-semibold">
-                                                    {cardDetails.data.productName ?? "Card benefits"}
-                                                </CardTitle>
+                                                <CardTitle className="text-lg font-semibold">Category breakdown</CardTitle>
+                                                <CardDescription>Last 30 days</CardDescription>
                                             </CardHeader>
-                                            <CardContent>
-                                                <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
-                                                    {cardDetails.data.features.map((feature) => (
-                                                        <li key={feature}>{feature}</li>
-                                                    ))}
-                                                </ul>
+                                            <CardContent className="h-64 p-0">
+                                                <DonutChart
+                                                    data={donutData}
+                                                    isLoading={cardDetails.isLoading}
+                                                    emptyMessage="No spending yet in the last 30 days."
+                                                />
                                             </CardContent>
                                         </Card>
-                                    ) : null}
-                                </>
-                            ) : cards.length ? (
-                                <Card className="rounded-3xl">
-                                    <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-                                        Select a card to see its details.
-                                    </CardContent>
-                                </Card>
-                            ) : (
-                                <Card className="rounded-3xl">
-                                    <CardHeader>
-                                        <CardTitle className="text-lg font-semibold">No cards yet</CardTitle>
-                                    </CardHeader>
-                                    <CardContent className="space-y-3 text-sm text-muted-foreground">
-                                        <p>Add your first card to unlock tailored coaching and spend insights.</p>
-                                        <div className="flex flex-col gap-2">
-                                            <Button onClick={() => setDialogOpen(true)}>Link a card</Button>
-                                            <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
-                                                Import existing card
-                                            </Button>
-                                            <Button variant="ghost" size="sm" onClick={handleDebug}>
-                                                Debug card data
-                                            </Button>
-                                        </div>
-                                        {showDebug && debugInfo && (
-                                            <div className="mt-4 rounded-md bg-muted p-3 text-xs">
-                                                <pre>{JSON.stringify(debugInfo, null, 2)}</pre>
-                                            </div>
-                                        )}
-                                    </CardContent>
-                                </Card>
-                            )}
-                        </div>
-                    </div>
 
-                    <AddCardDialog open={dialogOpen} onOpenChange={setDialogOpen} />
-                    <EditCardDialog open={editDialogOpen} onOpenChange={setEditDialogOpen} card={editingCard} />
-                    <ImportCardDialog open={importDialogOpen} onOpenChange={setImportDialogOpen} />
-                </div>
+                                        {cardDetails.data.features?.length ? (
+                                            <Card className="rounded-3xl">
+                                                <CardHeader>
+                                                    <CardTitle className="text-lg font-semibold">
+                                                        {cardDetails.data.productName ?? "Card benefits"}
+                                                    </CardTitle>
+                                                </CardHeader>
+                                                <CardContent>
+                                                    <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
+                                                        {cardDetails.data.features.map((feature) => (
+                                                            <li key={feature}>{feature}</li>
+                                                        ))}
+                                                    </ul>
+                                                </CardContent>
+                                            </Card>
+                                        ) : null}
+                                    </>
+                                ) : (
+                                    <Card className="rounded-3xl">
+                                        <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+                                            Select a card to see its details.
+                                        </CardContent>
+                                    </Card>
+                                )}
+                            </div>
+                        </div>
+
+                        <AddCardDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+                        <EditCardDialog open={editDialogOpen} onOpenChange={setEditDialogOpen} card={editingCard} />
+                    </div>
+                )
             ) : (
                 /* =============== CATALOG: glossy cards + pagination (4 per page) =============== */
                 <div className="space-y-6">
@@ -381,7 +361,6 @@ export default function CardsPage() {
                                 })}
                             </div>
 
-                            {/* Pagination: shows only when more than 4 results */}
                             {filteredCatalog.length > PAGE_SIZE && (
                                 <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
                                     <div className="text-xs text-muted-foreground">
@@ -400,7 +379,7 @@ export default function CardsPage() {
                                                     onClick={() => setPage(p)}
                                                     className={[
                                                         "h-8 w-8 rounded-full text-xs",
-                                                        p === page ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                                                        p === page ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
                                                     ].join(" ")}
                                                     aria-label={`Go to page ${p}`}
                                                 >
@@ -535,16 +514,12 @@ function CatalogCreditCard({ product, applied, onApply }: CatalogCreditCardProps
 
     return (
         <div className="space-y-3">
-            {/* glossy card */}
             <div className="relative overflow-hidden rounded-3xl">
                 <div className={`relative h-40 w-full rounded-3xl bg-gradient-to-br ${gradient} p-5 text-white`}>
-                    {/* sheen */}
                     <div className="pointer-events-none absolute -left-1/4 -top-1/2 h-[220%] w-[150%] rotate-12 bg-white/10 blur-2xl" />
-                    {/* content */}
                     <div className="relative flex h-full flex-col">
                         <div className="flex items-center justify-between">
                             <div className="text-[11px] font-semibold tracking-[0.18em] opacity-90">{issuer || "CARD ISSUER"}</div>
-                            {/* Only show pill when applied */}
                             {applied ? (
                                 <div className="rounded-full border border-white/40 bg-white/15 px-3 py-1 text-[11px] font-semibold">
                                     Applied
@@ -566,11 +541,9 @@ function CatalogCreditCard({ product, applied, onApply }: CatalogCreditCardProps
                         </div>
                     </div>
                 </div>
-                {/* soft shadow */}
                 <div className="absolute inset-0 -z-10 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.35)]" />
             </div>
 
-            {/* actions + quick details (outside to avoid nested buttons) */}
             <div className="flex items-center justify-between gap-3">
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span>Base: {percent1.format(product.base_cashback ?? 0)}</span>
