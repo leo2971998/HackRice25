@@ -441,10 +441,45 @@ def create_app() -> Flask:
         return (cap_val * rate + (spend - cap_val) * base) / spend
 
 
-    
+
 
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+    @api_bp.route("/applications", methods=["POST", "OPTIONS"])
+    def create_application():
+        # Let preflight through
+        if request.method == "OPTIONS":
+            return ("", 204)
+
+        user = g.current_user
+        data = request.get_json(silent=True) or {}
+
+        card_id = data.get("card_id")
+        product_slug = data.get("product_slug")
+        source = (data.get("source") or "cards_page_apply_button")
+
+        if not card_id and not product_slug:
+            raise BadRequest("Provide card_id or product_slug")
+
+        # Optional: try to coerce card_id to ObjectId if present
+        card_oid = None
+        if card_id:
+            try:
+                card_oid = ObjectId(card_id)
+            except Exception:
+                card_oid = card_id  # keep as string if not a valid ObjectId
+
+        doc = {
+            "userId": user["_id"],
+            "card_id": card_oid,
+            "product_slug": product_slug,
+            "source": source,
+            "applied_at": datetime.utcnow(),
+        }
+        app.config["MONGO_DB"]["applications"].insert_one(doc)
+        return jsonify({"ok": True}), 201
+
 
     def parse_card_ids_query() -> Optional[List[ObjectId]]:
         card_ids = request.args.getlist("cardIds")
@@ -1362,6 +1397,6 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     # Create and run the Flask app directly (use Flask CLI in production)
     app = create_app()
-    port = int(os.environ.get("PORT", "8000"))
+    port = int(os.environ.get("PORT", "5000"))
     debug = os.environ.get("FLASK_DEBUG", "1") in ("1", "true", "True")
     app.run(host="0.0.0.0", port=port, debug=debug)
