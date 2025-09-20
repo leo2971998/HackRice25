@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from bson import ObjectId
-from flask import Blueprint, Flask, jsonify, request, g, current_app
+from flask import Blueprint, Flask, jsonify, request, g
 from flask_cors import CORS
 from jose import jwt
 from jose.exceptions import JWTError
@@ -112,12 +112,19 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
 
 def ensure_indexes(database) -> None:
     users = database["users"]
+    # Omit custom names so we don't conflict with existing auto names like `auth0_id_1`, `email_1`
     users.create_index([("auth0_id", ASCENDING)], unique=True)
     users.create_index([("email", ASCENDING)], unique=True, sparse=True)
 
     accounts = database["accounts"]
     accounts.create_index([("userId", ASCENDING)])
-    accounts.create_index([("userId", ASCENDING), ("account_type", ASCENDING), ("account_mask", ASCENDING)], unique=True)
+    # Match existing composite index EXACTLY (includes sparse + name)
+    accounts.create_index(
+        [("userId", ASCENDING), ("account_type", ASCENDING), ("account_mask", ASCENDING)],
+        unique=True,
+        sparse=True,
+        name="userId_1_account_type_1_account_mask_1",
+    )
 
     transactions = database["transactions"]
     transactions.create_index([("userId", ASCENDING), ("date", DESCENDING)])
@@ -383,9 +390,7 @@ def create_app() -> Flask:
     def get_status():
         user = g.current_user
         accounts = database["accounts"]
-        has_account = (
-            accounts.count_documents({"userId": user["_id"], "account_type": "credit_card"}) > 0
-        )
+        has_account = accounts.count_documents({"userId": user["_id"], "account_type": "credit_card"}) > 0
         return jsonify({"emailVerified": bool(user.get("email_verified")), "hasAccount": has_account})
 
     @api_bp.post("/auth/resend-verification")
@@ -408,11 +413,7 @@ def create_app() -> Flask:
         ]
         return jsonify(
             {
-                "stats": {
-                    "totalSpend": round(total, 2),
-                    "txns": count,
-                    "accounts": accounts_count,
-                },
+                "stats": {"totalSpend": round(total, 2), "txns": count, "accounts": accounts_count},
                 "byCategory": categories,
             }
         )
@@ -429,9 +430,7 @@ def create_app() -> Flask:
         if limit <= 0:
             raise BadRequest("limit must be positive")
         cutoff = datetime.utcnow() - timedelta(days=window_days)
-        txns = list(
-            database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}})
-        )
+        txns = list(database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}}))
         merchants_map: Dict[str, Dict[str, Any]] = {}
         for txn in txns:
             name = txn.get("merchant_id") or txn.get("description_clean") or txn.get("description") or "Merchant"
@@ -446,14 +445,14 @@ def create_app() -> Flask:
         return jsonify(
             [
                 {
-                    "id": merchant["id"],
-                    "name": merchant["name"],
-                    "category": merchant["category"],
-                    "count": merchant["count"],
-                    "total": round(merchant["total"], 2),
-                    "logoUrl": merchant.get("logoUrl", ""),
+                    "id": m["id"],
+                    "name": m["name"],
+                    "category": m["category"],
+                    "count": m["count"],
+                    "total": round(m["total"], 2),
+                    "logoUrl": m.get("logoUrl", ""),
                 }
-                for merchant in ordered[:limit]
+                for m in ordered[:limit]
             ]
         )
 
@@ -462,16 +461,18 @@ def create_app() -> Flask:
         user = g.current_user
         window_days = parse_window_days(30)
         cutoff = datetime.utcnow() - timedelta(days=window_days)
-        txns = list(
-            database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}})
-        )
+        txns = list(database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}}))
         moments = list(calculate_money_moments(window_days, txns))
         return jsonify(moments)
 
     @api_bp.get("/cards")
     def list_cards():
         user = g.current_user
-        cards = database["accounts"].find({"userId": user["_id"], "account_type": "credit_card"}).sort("nickname", ASCENDING)
+        cards = (
+            database["accounts"]
+            .find({"userId": user["_id"], "account_type": "credit_card"})
+            .sort("nickname", ASCENDING)
+        )
         return jsonify([format_card_row(card) for card in cards])
 
     @api_bp.post("/cards")
@@ -519,7 +520,9 @@ def create_app() -> Flask:
         return jsonify({"id": str(result.inserted_id)}), 201
 
     def get_card_or_404(card_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
-        card = database["accounts"].find_one({"_id": validate_object_id(card_id), "userId": user["_id"], "account_type": "credit_card"})
+        card = database["accounts"].find_one(
+            {"_id": validate_object_id(card_id), "userId": user["_id"], "account_type": "credit_card"}
+        )
         if not card:
             raise NotFound("Card not found")
         return card
@@ -548,11 +551,7 @@ def create_app() -> Flask:
         cutoff = datetime.utcnow() - timedelta(days=window_days)
         txns = list(
             database["transactions"].find(
-                {
-                    "userId": user["_id"],
-                    "accountId": card["_id"],
-                    "date": {"$gte": cutoff},
-                }
+                {"userId": user["_id"], "accountId": card["_id"], "date": {"$gte": cutoff}}
             )
         )
         total, count, by_category = calculate_summary(txns)
@@ -632,4 +631,9 @@ def create_app() -> Flask:
     return app
 
 
-app = create_app()
+if __name__ == "__main__":
+    # Create and run the Flask app directly (use Flask CLI in production)
+    app = create_app()
+    port = int(os.environ.get("PORT", "5001"))
+    debug = os.environ.get("FLASK_DEBUG", "1") in ("1", "true", "True")
+    app.run(host="0.0.0.0", port=port, debug=debug)
