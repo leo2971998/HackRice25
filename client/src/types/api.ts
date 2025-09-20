@@ -43,3 +43,9 @@ export type ChatMessage = {
   content: string
   timestamp: string
 }
+
+export type UserProfile = {
+  userId: string
+  email: string | null
+  name: string | null
+}
