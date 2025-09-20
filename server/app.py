@@ -1129,6 +1129,46 @@ def create_app() -> Flask:
 
         total = coll.estimated_document_count()
         return jsonify({"items": items, "total": total, "limit": limit, "offset": offset})
+    
+    @api_bp.get("/cards/with-product")
+    def list_cards_with_product():
+        """
+        Return the current user's credit cards joined with the credit_cards catalog.
+        Joins accounts.card_product_id (slug) -> credit_cards.slug
+        """
+        user = g.current_user
+        pipeline = [
+            {"$match": {"userId": user["_id"], "account_type": "credit_card"}},
+            {
+                "$lookup": {
+                    "from": "credit_cards",
+                    "localField": "card_product_id",  # slug stored in accounts
+                    "foreignField": "slug",           # slug in credit_cards
+                    "as": "product",
+                }
+            },
+            {"$unwind": "$product"},
+            {
+                "$project": {
+                    "account_id": {"$toString": "$_id"},
+                    "nickname": 1,
+                    "issuer": 1,
+                    "network": 1,
+                    "account_mask": 1,
+                    "card_product_id": 1,
+                    "product_slug": "$product.slug",
+                    "product_name": "$product.product_name",
+                    "product_issuer": "$product.issuer",
+                    "base_cashback": "$product.base_cashback",
+                    "rewards": "$product.rewards",
+                    "annual_fee": "$product.annual_fee",
+                    "active": "$product.active",
+                }
+            },
+        ]
+        rows = list(database["accounts"].aggregate(pipeline))
+        return jsonify(rows)
+
     app.register_blueprint(api_bp)
 
     
