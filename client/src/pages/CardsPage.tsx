@@ -18,22 +18,11 @@ import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/lib/api-client"
 
 import { useCards, useCard, useDeleteCard, useCardCatalog } from "@/hooks/useCards"
-import type { CardRow, CreditCardProduct } from "@/types/api"
+import type { CardRow as CardRowType, CreditCardProduct } from "@/types/api"
 
-const currency0 = new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-})
-const currency2 = new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-})
-const percent1 = new Intl.NumberFormat(undefined, {
-    style: "percent",
-    maximumFractionDigits: 1,
-})
+const currency0 = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 })
+const currency2 = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 })
+const percent1 = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 })
 
 type CardsTab = "linked" | "catalog"
 const TABS: { id: CardsTab; label: string }[] = [
@@ -50,22 +39,20 @@ const ANNUAL_FEE_FILTERS = [
 ] as const
 type AnnualFeeFilter = typeof ANNUAL_FEE_FILTERS[number]["value"]
 
+const PAGE_SIZE = 4
+
 export default function CardsPage() {
     const { toast } = useToast()
 
-    // ----- LINKED CARDS (management) -----
+    /* =============== LINKED CARDS =============== */
     const cardsQuery = useCards()
     const cards = cardsQuery.data ?? []
     const [selectedId, setSelectedId] = useState<string | undefined>()
     const cardDetails = useCard(selectedId)
 
     const deleteCard = useDeleteCard({
-        onSuccess: () => {
-            toast({ title: "Card removed", description: "We’ll tidy up your stats." })
-        },
-        onError: (error) => {
-            toast({ title: "Unable to remove card", description: error.message })
-        },
+        onSuccess: () => toast({ title: "Card removed", description: "We’ll tidy up your stats." }),
+        onError: (error) => toast({ title: "Unable to remove card", description: error.message }),
     })
 
     useEffect(() => {
@@ -73,15 +60,13 @@ export default function CardsPage() {
             setSelectedId(undefined)
             return
         }
-        if (!selectedId || !cards.some((c) => c.id === selectedId)) {
-            setSelectedId(cards[0].id)
-        }
+        if (!selectedId || !cards.some((c) => c.id === selectedId)) setSelectedId(cards[0].id)
     }, [cards, selectedId])
 
     const [dialogOpen, setDialogOpen] = useState(false)
     const [editDialogOpen, setEditDialogOpen] = useState(false)
     const [importDialogOpen, setImportDialogOpen] = useState(false)
-    const [editingCard, setEditingCard] = useState<CardRow | null>(null)
+    const [editingCard, setEditingCard] = useState<CardRowType | null>(null)
     const [debugInfo, setDebugInfo] = useState<any>(null)
     const [showDebug, setShowDebug] = useState(false)
 
@@ -109,9 +94,13 @@ export default function CardsPage() {
         }
     }
 
-    // ----- CATALOG (filterable list) -----
+    // already-linked/applied matcher
+    const appliedMatcher = useMemo(() => buildAppliedMatcher(cards), [cards])
+
+    /* =============== CATALOG =============== */
     const catalogQuery = useCardCatalog({ active: true })
-    const catalogCards: CreditCardProduct[] = catalogQuery.data ?? []
+    const rawCatalog = catalogQuery.data as any
+    const catalogCards: CreditCardProduct[] = useMemo(() => extractCatalogCards(rawCatalog), [rawCatalog])
 
     const issuers = useMemo(() => {
         const s = new Set<string>()
@@ -121,15 +110,15 @@ export default function CardsPage() {
 
     const categories = useMemo(() => {
         const s = new Set<string>()
-        for (const card of catalogCards) {
-            for (const r of card?.rewards ?? []) if (r?.category) s.add(r.category)
-        }
+        for (const card of catalogCards) for (const r of card?.rewards ?? []) if (r?.category) s.add(r.category)
         return [...s].sort((a, b) => a.localeCompare(b))
     }, [catalogCards])
 
     const [issuerFilter, setIssuerFilter] = useState<string>("all")
     const [categoryFilter, setCategoryFilter] = useState<string>("all")
     const [annualFeeFilter, setAnnualFeeFilter] = useState<AnnualFeeFilter>("all")
+
+    const [appliedSlugs, setAppliedSlugs] = useState<Set<string>>(new Set())
 
     const filteredCatalog = useMemo(() => {
         return catalogCards.filter((card) => {
@@ -141,8 +130,33 @@ export default function CardsPage() {
         })
     }, [catalogCards, issuerFilter, categoryFilter, annualFeeFilter])
 
-    // ----- TABS -----
+    // pagination
+    const [page, setPage] = useState(1)
+    useEffect(() => {
+        setPage(1) // reset to first page on filter changes
+    }, [issuerFilter, categoryFilter, annualFeeFilter, catalogCards.length])
+
+    const totalPages = Math.max(1, Math.ceil(filteredCatalog.length / PAGE_SIZE))
+    const start = (page - 1) * PAGE_SIZE
+    const end = start + PAGE_SIZE
+    const pageItems = filteredCatalog.slice(start, end)
+
     const [activeTab, setActiveTab] = useState<CardsTab>("linked")
+
+    const onApply = async (product: CreditCardProduct) => {
+        try {
+            await apiFetch("/applications", {
+                method: "POST",
+                body: { slug: product.slug, product_name: product.product_name, issuer: product.issuer },
+            })
+            const next = new Set(appliedSlugs)
+            if (product.slug) next.add(product.slug)
+            setAppliedSlugs(next)
+            toast({ title: "Application started", description: `${product.product_name} by ${product.issuer}` })
+        } catch (e: any) {
+            toast({ title: "Couldn’t start application", description: e?.message ?? "Unknown error" })
+        }
+    }
 
     return (
         <div className="mx-auto max-w-7xl space-y-8 px-4 md:px-6 lg:px-8">
@@ -168,11 +182,11 @@ export default function CardsPage() {
                 </div>
             </div>
 
-            {/* Linked cards tab */}
+            {/* Linked cards */}
             {activeTab === "linked" ? (
                 <div className="space-y-6">
                     <div className="flex flex-col gap-6 md:flex-row">
-                        <div className="md:w-1/3 space-y-4">
+                        <div className="md:w-5/12 space-y-4">
                             <CardSelector
                                 cards={cards}
                                 selectedId={selectedId}
@@ -181,10 +195,11 @@ export default function CardsPage() {
                                 onEdit={handleEdit}
                                 onAdd={() => setDialogOpen(true)}
                                 isLoading={cardsQuery.isLoading}
+                                heightClass="max-h-[780px]"
                             />
                         </div>
 
-                        <div className="md:w-2/3 space-y-4">
+                        <div className="md:w-7/12 space-y-4">
                             {cardDetails.isLoading ? (
                                 <Card className="rounded-3xl">
                                     <CardContent className="flex h-48 items-center justify-center text-sm text-muted-foreground">
@@ -273,18 +288,24 @@ export default function CardsPage() {
                         </div>
                     </div>
 
-                    {/* dialogs for linked tab */}
                     <AddCardDialog open={dialogOpen} onOpenChange={setDialogOpen} />
                     <EditCardDialog open={editDialogOpen} onOpenChange={setEditDialogOpen} card={editingCard} />
                     <ImportCardDialog open={importDialogOpen} onOpenChange={setImportDialogOpen} />
                 </div>
             ) : (
-                // Catalog tab
+                /* =============== CATALOG: glossy cards + pagination (4 per page) =============== */
                 <div className="space-y-6">
                     <Card className="rounded-3xl p-0">
                         <CardHeader className="p-6 md:p-8 pb-0">
-                            <CardTitle className="text-xl font-semibold">All cards</CardTitle>
-                            <CardDescription>Deterministic catalog data — no PII, no surprises.</CardDescription>
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <CardTitle className="text-xl font-semibold">All cards</CardTitle>
+                                    <CardDescription>Deterministic catalog data — no PII, no surprises.</CardDescription>
+                                </div>
+                                <span className="text-xs text-muted-foreground">
+                  {catalogQuery.isLoading ? "…" : `${filteredCatalog.length} items`}
+                </span>
+                            </div>
                         </CardHeader>
                         <CardContent className="space-y-4 p-6 md:p-8 pt-4">
                             <div className="grid gap-4 md:grid-cols-3">
@@ -329,22 +350,6 @@ export default function CardsPage() {
                                     </SelectContent>
                                 </Select>
                             </div>
-
-                            {(issuerFilter !== "all" || categoryFilter !== "all" || annualFeeFilter !== "all") && (
-                                <div>
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => {
-                                            setIssuerFilter("all")
-                                            setCategoryFilter("all")
-                                            setAnnualFeeFilter("all")
-                                        }}
-                                    >
-                                        Clear filters
-                                    </Button>
-                                </div>
-                            )}
                         </CardContent>
                     </Card>
 
@@ -361,11 +366,55 @@ export default function CardsPage() {
                             </CardContent>
                         </Card>
                     ) : (
-                        <div className="grid gap-6 md:grid-cols-2">
-                            {filteredCatalog.map((card) => (
-                                <CatalogCard key={card.slug ?? card.product_name} card={card} />
-                            ))}
-                        </div>
+                        <>
+                            <div className="grid gap-6 md:grid-cols-2">
+                                {pageItems.map((product) => {
+                                    const applied = appliedSlugs.has(product.slug ?? "") || appliedMatcher(product)
+                                    return (
+                                        <CatalogCreditCard
+                                            key={product.slug ?? product.product_name}
+                                            product={product}
+                                            applied={applied}
+                                            onApply={() => onApply(product)}
+                                        />
+                                    )
+                                })}
+                            </div>
+
+                            {/* Pagination: shows only when more than 4 results */}
+                            {filteredCatalog.length > PAGE_SIZE && (
+                                <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
+                                    <div className="text-xs text-muted-foreground">
+                                        Showing <b>{start + 1}</b>–<b>{Math.min(end, filteredCatalog.length)}</b> of{" "}
+                                        <b>{filteredCatalog.length}</b>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+                                            Previous
+                                        </Button>
+                                        <div className="flex items-center gap-1">
+                                            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                                                <button
+                                                    key={p}
+                                                    type="button"
+                                                    onClick={() => setPage(p)}
+                                                    className={[
+                                                        "h-8 w-8 rounded-full text-xs",
+                                                        p === page ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                                                    ].join(" ")}
+                                                    aria-label={`Go to page ${p}`}
+                                                >
+                                                    {p}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+                                            Next
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             )}
@@ -373,7 +422,7 @@ export default function CardsPage() {
     )
 }
 
-/* ---------------- helpers ---------------- */
+/* ===================== helpers ===================== */
 
 function matchesAnnualFee(fee: number | null | undefined, filter: AnnualFeeFilter) {
     if (filter === "all") return true
@@ -385,77 +434,6 @@ function matchesAnnualFee(fee: number | null | undefined, filter: AnnualFeeFilte
     return true
 }
 
-type CatalogCardProps = { card: CreditCardProduct }
-
-function CatalogCard({ card }: CatalogCardProps) {
-    const rewards = card.rewards ?? []
-    const topRewards = rewards.slice(0, 3)
-    const welcome = card.welcome_offer
-    const baseCashback = card.base_cashback ?? 0
-
-    return (
-        <Card className="rounded-3xl p-0">
-            <CardHeader className="space-y-1 p-6 md:p-8 pb-4">
-                <CardTitle className="text-xl font-semibold text-foreground">{card.product_name}</CardTitle>
-                <CardDescription>{[card.issuer, card.network].filter(Boolean).join(" • ")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 p-6 md:p-8 pt-0 text-sm md:text-base">
-                <div className="grid gap-2 sm:grid-cols-3">
-                    <DetailBlock label="Annual fee" value={formatAnnualFee(card.annual_fee)} />
-                    <DetailBlock label="Base rate" value={percent1.format(baseCashback)} />
-                    <DetailBlock label="Foreign Tx fee" value={formatForeignFee(card.foreign_tx_fee)} />
-                </div>
-
-                <div className="space-y-2">
-                    <h4 className="text-sm font-semibold text-foreground md:text-base">Bonus categories</h4>
-                    {topRewards.length === 0 ? (
-                        <p className="text-sm text-muted-foreground md:text-base">No published category boosts.</p>
-                    ) : (
-                        <div className="flex flex-wrap gap-2">
-                            {topRewards.map((r) => (
-                                <Badge
-                                    key={`${r.category}-${r.rate}`}
-                                    variant="secondary"
-                                    className="rounded-full px-3 py-1 text-xs md:text-sm"
-                                >
-                                    {r.category ?? "Category"}: {percent1.format(r.rate ?? 0)}
-                                    {r.cap_monthly ? ` up to ${currency0.format(r.cap_monthly)} / mo` : ""}
-                                </Badge>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {welcome && (welcome.bonus_value_usd || welcome.min_spend) ? (
-                    <div className="rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground md:text-base">
-                        Welcome offer worth approximately {currency0.format(welcome.bonus_value_usd ?? 0)}
-                        {welcome.min_spend ? ` after ${currency0.format(welcome.min_spend)} in spend` : ""}
-                        {welcome.window_days ? ` within ${welcome.window_days} days` : ""}.
-                    </div>
-                ) : null}
-
-                {card.link_url ? (
-                    <Button asChild variant="outline" size="sm">
-                        <a href={card.link_url} target="_blank" rel="noreferrer">
-                            View card details
-                        </a>
-                    </Button>
-                ) : null}
-            </CardContent>
-        </Card>
-    )
-}
-
-type DetailBlockProps = { label: string; value: string }
-function DetailBlock({ label, value }: DetailBlockProps) {
-    return (
-        <div className="rounded-2xl border border-border/60 px-4 py-3">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-            <p className="text-sm font-semibold text-foreground md:text-base">{value}</p>
-        </div>
-    )
-}
-
 function formatAnnualFee(fee: number | null | undefined) {
     if (fee == null) return "—"
     if (fee === 0) return "$0"
@@ -464,6 +442,163 @@ function formatAnnualFee(fee: number | null | undefined) {
 function formatForeignFee(value: number | null | undefined) {
     if (value == null) return "None"
     if (value <= 0) return "None"
-    if (value > 0 && value <= 1) return percent1.format(value) // treat decimal as %
-    return currency0.format(value) // treat as flat USD fee
+    if (value > 0 && value <= 1) return percent1.format(value)
+    return currency0.format(value)
+}
+
+function extractCatalogCards(raw: any): CreditCardProduct[] {
+    if (!raw) return []
+    if (Array.isArray(raw)) return raw
+    const keys = ["items", "results", "data", "cards", "products", "catalog", "rows", "list"]
+    for (const k of keys) {
+        const v = raw?.[k]
+        if (Array.isArray(v)) return v
+    }
+    if (raw.data && typeof raw.data === "object") {
+        for (const k of keys) {
+            const v = raw.data[k]
+            if (Array.isArray(v)) return v
+        }
+        if (Array.isArray(raw.data)) return raw.data
+    }
+    for (const v of Object.values(raw)) {
+        if (Array.isArray(v) && v.length && typeof v[0] === "object") {
+            const obj = v[0] as any
+            if ("product_name" in obj || "issuer" in obj || "rewards" in obj) return v as any
+        }
+    }
+    return []
+}
+
+function buildAppliedMatcher(cards: CardRowType[]) {
+    const norm = (s?: string | null) =>
+        (s ?? "")
+            .toLowerCase()
+            .replace(/[®™]/g, "")
+            .replace(/\b(card|credit|preferred|gold|x)\b/g, "")
+            .replace(/[^\w]+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+
+    const nameSet = new Set<string>()
+    const issuerNameSet = new Set<string>()
+    const slugSet = new Set<string>()
+
+    for (const c of cards) {
+        const n1 = norm((c as any).productName)
+        const n2 = norm((c as any).nickname)
+        if (n1) nameSet.add(n1)
+        if (n2) nameSet.add(n2)
+
+        const issuer = norm((c as any).issuer)
+        const joined = `${issuer} ${n1 || n2}`.trim()
+        if (issuer && (n1 || n2)) issuerNameSet.add(joined)
+
+        const pslug = (c as any).productSlug
+        if (pslug) slugSet.add(pslug)
+    }
+
+    return (p: CreditCardProduct) => {
+        const pName = norm(p.product_name)
+        const pIssuer = norm(p.issuer)
+        const pJoined = `${pIssuer} ${pName}`.trim()
+        return (
+            (p.slug && slugSet.has(p.slug)) ||
+            (pName && nameSet.has(pName)) ||
+            (pIssuer && pName && issuerNameSet.has(pJoined))
+        )
+    }
+}
+
+/* ===================== glossy catalog card ===================== */
+
+type CatalogCreditCardProps = {
+    product: CreditCardProduct
+    applied: boolean
+    onApply: () => void
+}
+
+function gradientFor(product: CreditCardProduct) {
+    const key = (product.issuer || product.network || "").toLowerCase()
+    if (key.includes("american")) return "from-fuchsia-500 via-purple-500 to-indigo-600"
+    if (key.includes("chase")) return "from-sky-500 via-blue-500 to-indigo-600"
+    if (key.includes("capital")) return "from-emerald-500 via-teal-500 to-cyan-600"
+    if (key.includes("citi")) return "from-pink-500 via-rose-500 to-red-600"
+    return "from-violet-500 via-purple-500 to-fuchsia-600"
+}
+
+function CatalogCreditCard({ product, applied, onApply }: CatalogCreditCardProps) {
+    const gradient = gradientFor(product)
+    const issuer = (product.issuer ?? "").toUpperCase()
+    const name = product.product_name
+    const annual = formatAnnualFee(product.annual_fee)
+
+    return (
+        <div className="space-y-3">
+            {/* glossy card */}
+            <div className="relative overflow-hidden rounded-3xl">
+                <div className={`relative h-40 w-full rounded-3xl bg-gradient-to-br ${gradient} p-5 text-white`}>
+                    {/* sheen */}
+                    <div className="pointer-events-none absolute -left-1/4 -top-1/2 h-[220%] w-[150%] rotate-12 bg-white/10 blur-2xl" />
+                    {/* content */}
+                    <div className="relative flex h-full flex-col">
+                        <div className="flex items-center justify-between">
+                            <div className="text-[11px] font-semibold tracking-[0.18em] opacity-90">{issuer || "CARD ISSUER"}</div>
+                            {/* Only show pill when applied */}
+                            {applied ? (
+                                <div className="rounded-full border border-white/40 bg-white/15 px-3 py-1 text-[11px] font-semibold">
+                                    Applied
+                                </div>
+                            ) : null}
+                        </div>
+
+                        <div className="mt-1 text-xl font-semibold leading-6">{name}</div>
+
+                        <div className="mt-auto flex items-end justify-between text-xs">
+                            <div className="space-x-2 opacity-90">
+                                <span>•••• •••• •••• 0000</span>
+                                <span className="hidden sm:inline">SWIPE COACH MEMBER</span>
+                            </div>
+                            <div className="text-right opacity-90">
+                                <div className="uppercase tracking-wide">Annual fee</div>
+                                <div className="font-semibold">{annual}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {/* soft shadow */}
+                <div className="absolute inset-0 -z-10 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.35)]" />
+            </div>
+
+            {/* actions + quick details (outside to avoid nested buttons) */}
+            <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>Base: {percent1.format(product.base_cashback ?? 0)}</span>
+                    {product.rewards?.slice(0, 2).map((r, i) => (
+                        <Badge key={i} variant="secondary" className="rounded-full px-3 py-1">
+                            {r.category}: {percent1.format(r.rate ?? 0)}
+                        </Badge>
+                    ))}
+                </div>
+                <div className="flex items-center gap-2">
+                    {applied ? (
+                        <Button variant="outline" size="sm" disabled>
+                            Applied
+                        </Button>
+                    ) : (
+                        <Button size="sm" onClick={onApply}>
+                            Apply
+                        </Button>
+                    )}
+                    {product.link_url ? (
+                        <Button asChild variant="ghost" size="sm">
+                            <a href={product.link_url} target="_blank" rel="noreferrer">
+                                Details
+                            </a>
+                        </Button>
+                    ) : null}
+                </div>
+            </div>
+        </div>
+    )
 }

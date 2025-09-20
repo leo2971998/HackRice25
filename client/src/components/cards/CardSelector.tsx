@@ -11,6 +11,7 @@ type Props = {
     onEdit?: (id: string) => void
     onAdd?: () => void
     isLoading?: boolean
+    heightClass?: string
 }
 
 export function CardSelector({
@@ -21,6 +22,7 @@ export function CardSelector({
                                  onEdit,
                                  onAdd,
                                  isLoading,
+                                 heightClass = "max-h-[760px]", // bumped taller default
                              }: Props) {
     return (
         <Card className="rounded-3xl">
@@ -49,7 +51,7 @@ export function CardSelector({
                         ) : null}
                     </div>
                 ) : (
-                    <div className="flex max-h-[520px] flex-col gap-2 overflow-y-auto pr-1">
+                    <div className={`flex flex-col gap-2 overflow-y-auto pr-1 ${heightClass}`}>
                         {cards.map((c) => (
                             <CardRow
                                 key={c.id}
