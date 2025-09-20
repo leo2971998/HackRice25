@@ -13,18 +13,20 @@ export type Me = {
   preferences: Preferences
 }
 
+export type CategoryShare = { name: string; total: number; share: number }
+
 export type SpendSummary = {
   stats: { totalSpend: number; txns: number; accounts: number }
-  byCategory: { name: string; total: number }[]
+  byCategory: CategoryShare[]
+  others: { total: number; share: number; count: number }
 }
 
-export type MerchantRow = {
-  id: string
-  name: string
+export type MerchantBreakdownRow = {
+  merchant: string
   category: string
+  subcategory: string
   count: number
   total: number
-  logoUrl?: string
 }
 
 export type MoneyMoment = {
@@ -57,4 +59,19 @@ export type CardDetails = CardRow & {
   productName?: string
   features?: string[]
   summary?: CardSummary
+}
+
+export type CashbackEstimate = {
+  periodSpend: number
+  estimatedRewards: number
+  bestCard: { id: string; name: string; issuer: string } | null
+  byCategory: { category: string; spend: number; estRewards: number }[]
+}
+
+export type CardRecommendation = {
+  cardId: string
+  name: string
+  issuer: string
+  estAnnualValue: number
+  reasons: string[]
 }

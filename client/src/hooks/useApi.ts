@@ -1,7 +1,16 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type UseQueryOptions } from "@tanstack/react-query"
 
 import { apiFetch } from "@/lib/api-client"
-import type { CardRow, Me, MerchantRow, MoneyMoment, Preferences, SpendSummary } from "@/types/api"
+import type {
+  CardRecommendation,
+  CardRow,
+  CashbackEstimate,
+  Me,
+  MerchantBreakdownRow,
+  MoneyMoment,
+  Preferences,
+  SpendSummary,
+} from "@/types/api"
 
 const DEFAULT_STALE_TIME = 60_000
 
@@ -18,59 +27,62 @@ export function useMe(options?: QueryOpts<Me>) {
   })
 }
 
-export function useSpendSummary(
-  windowDays: number, 
-  options?: QueryOpts<SpendSummary> & { cardIds?: string[] }
-) {
-  const { cardIds, ...queryOptions } = options || {}
-  const query = new URLSearchParams({ window: String(windowDays) })
-  
-  if (cardIds && cardIds.length > 0) {
-    cardIds.forEach(id => query.append('cardIds', id))
-  }
-  
+export function useCategorySummary(windowDays = 30, options?: QueryOpts<SpendSummary>) {
   return useQuery({
-    queryKey: ["spend-summary", { windowDays, cardIds }],
-    queryFn: () => apiFetch<SpendSummary>(`/spend/summary?${query.toString()}`),
-    ...queryOptions,
-  })
-}
-
-export function useMerchants(
-  params: { limit: number; windowDays: number; cardIds?: string[] },
-  options?: QueryOpts<MerchantRow[]>
-) {
-  const query = new URLSearchParams({ 
-    limit: String(params.limit), 
-    window: String(params.windowDays) 
-  })
-  
-  if (params.cardIds && params.cardIds.length > 0) {
-    params.cardIds.forEach(id => query.append('cardIds', id))
-  }
-  
-  return useQuery({
-    queryKey: ["merchants", { limit: params.limit, windowDays: params.windowDays, cardIds: params.cardIds }],
-    queryFn: () => apiFetch<MerchantRow[]>(`/merchants?${query.toString()}`),
+    queryKey: ["spend-summary", { windowDays }],
+    queryFn: () => apiFetch<SpendSummary>(`/spend/summary?window=${windowDays}`),
     ...options,
   })
 }
 
-export function useMoneyMoments(
-  windowDays: number, 
-  options?: QueryOpts<MoneyMoment[]> & { cardIds?: string[] }
+export function useMerchantBreakdown(
+  params: { windowDays?: number; category?: string; limit?: number },
+  options?: QueryOpts<MerchantBreakdownRow[]>
 ) {
-  const { cardIds, ...queryOptions } = options || {}
-  const query = new URLSearchParams({ window: String(windowDays) })
-  
-  if (cardIds && cardIds.length > 0) {
-    cardIds.forEach(id => query.append('cardIds', id))
+  const query = new URLSearchParams({ window: String(params.windowDays ?? 90) })
+  if (params.category && params.category !== "All") {
+    query.set("category", params.category)
   }
-  
+  if (params.limit) {
+    query.set("limit", String(params.limit))
+  }
+
   return useQuery({
-    queryKey: ["money-moments", { windowDays, cardIds }],
-    queryFn: () => apiFetch<MoneyMoment[]>(`/money-moments?${query.toString()}`),
-    ...queryOptions,
+    queryKey: ["merchant-breakdown", { window: params.windowDays ?? 90, category: params.category, limit: params.limit }],
+    queryFn: () => apiFetch<MerchantBreakdownRow[]>(`/spend/merchants?${query.toString()}`),
+    ...options,
+  })
+}
+
+export function useMoneyMoments(windowDays: number, options?: QueryOpts<MoneyMoment[]>) {
+  return useQuery({
+    queryKey: ["money-moments", { windowDays }],
+    queryFn: () => apiFetch<MoneyMoment[]>(`/money-moments?window=${windowDays}`),
+    ...options,
+  })
+}
+
+export function useCashbackEstimate(params?: { windowDays?: number }, options?: QueryOpts<CashbackEstimate>) {
+  const windowDays = params?.windowDays ?? 90
+  return useQuery({
+    queryKey: ["cashback-estimate", { windowDays }],
+    queryFn: () => apiFetch<CashbackEstimate>(`/rewards/estimate?window=${windowDays}`),
+    ...options,
+  })
+}
+
+export function useRecommendations(
+  params?: { windowDays?: number; topN?: number },
+  options?: QueryOpts<{ ranked: CardRecommendation[] }>
+) {
+  const windowDays = params?.windowDays ?? 90
+  const topN = params?.topN ?? 5
+  return useQuery({
+    queryKey: ["recommendations", { windowDays, topN }],
+    queryFn: () => apiFetch<{ ranked: CardRecommendation[] }>(
+      `/rewards/recommendations?window=${windowDays}&top=${topN}`
+    ),
+    ...options,
   })
 }
 

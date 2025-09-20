@@ -6,6 +6,8 @@ import { HomePage } from "@/pages/HomePage"
 import CardsPage from "@/pages/CardsPage"
 import { SettingsPage } from "@/pages/SettingsPage"
 import { SetupPage } from "@/pages/SetupPage"
+import { SpendingDetailsPage } from "@/pages/SpendingDetailsPage"
+import { RecommendationsPage } from "@/pages/RecommendationsPage"
 import { ProtectedRoute } from "@/routes/ProtectedRoute"
 
 function AppLayout() {
@@ -36,6 +38,8 @@ const routes = [
     ),
     children: [
       { index: true, element: <HomePage /> },
+      { path: "spending", element: <SpendingDetailsPage /> },
+      { path: "recommendations", element: <RecommendationsPage /> },
       { path: "cards", element: <CardsPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "setup", element: <SetupPage /> },
