@@ -309,9 +309,21 @@ def create_app() -> Flask:
     load_environment()
     app = Flask(__name__)
 
-    app_settings = get_auth_settings()
+    # ✅ Local dev switch (set DISABLE_AUTH=1 in your .env)
+    disable_auth = os.environ.get("DISABLE_AUTH", "0").lower() in ("1", "true")
+
+    # Only load Auth0 settings if we actually need them
+    app_settings = None if disable_auth else get_auth_settings()
+
     allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
-    CORS(app, resources={r"/api/*": {"origins": allowed_origin}}, supports_credentials=True)
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": [allowed_origin]}},
+        supports_credentials=True,
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=["Content-Type"]
+    )
 
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
@@ -321,16 +333,33 @@ def create_app() -> Flask:
         AUTH_SETTINGS=app_settings,
         MONGO_CLIENT=mongo_client,
         MONGO_DB=database,
+        DISABLE_AUTH=disable_auth,
     )
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
     @api_bp.before_request
     def authenticate_request() -> None:
-        payload = decode_token(app_settings)
+        # ✅ Always let CORS preflight through
+        if request.method == "OPTIONS":
+            return ("", 204)
+
+        if app.config["DISABLE_AUTH"]:
+            # ✅ Local dev user
+            payload = {
+                "sub": "dev|local",
+                "email": "dev@local",
+                "email_verified": True,
+                "name": "Dev User",
+            }
+            g.current_token = payload
+            g.current_user = get_or_create_user(database["users"], payload)
+            return
+
+        # Normal Auth0 path
+        payload = decode_token(app.config["AUTH_SETTINGS"])
         g.current_token = payload
-        user_doc = get_or_create_user(database["users"], payload)
-        g.current_user = user_doc
+        g.current_user = get_or_create_user(database["users"], payload)
 
     @api_bp.get("/me")
     def get_me():
@@ -723,6 +752,6 @@ def create_app() -> Flask:
 if __name__ == "__main__":
     # Create and run the Flask app directly (use Flask CLI in production)
     app = create_app()
-    port = int(os.environ.get("PORT", "5001"))
+    port = int(os.environ.get("PORT", "5000"))
     debug = os.environ.get("FLASK_DEBUG", "1") in ("1", "true", "True")
     app.run(host="0.0.0.0", port=port, debug=debug)
