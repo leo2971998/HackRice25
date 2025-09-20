@@ -42,6 +42,26 @@ export function useCard(id: string | undefined, options?: QueryOpts<CardDetails 
   })
 }
 
+export function useApplyForCard(
+  options?: MutationOpts<
+    { status: string; applicationId: string },
+    { slug: string; product_name: string; issuer: string }
+  >,
+) {
+  const { onSuccess, ...rest } = options ?? {}
+  return useMutation({
+    mutationFn: (payload: { slug: string; product_name: string; issuer: string }) =>
+      apiFetch<{ status: string; applicationId: string }>("/applications", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: (data, variables, onMutateResult, context) => {
+      onSuccess?.(data, variables, onMutateResult, context)
+    },
+    ...rest,
+  })
+}
+
 export function useAddCard(options?: MutationOpts<{ id: string }, Record<string, unknown>>) {
   const queryClient = useQueryClient()
   const { onSuccess, ...rest } = options ?? {}
