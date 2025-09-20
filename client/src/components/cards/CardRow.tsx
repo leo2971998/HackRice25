@@ -1,71 +1,93 @@
-import { CreditCard, Edit, Trash2 } from "lucide-react"
-
+import { KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
-import type { CardRow as CardRowType } from "@/types/api"
+import { Card as UICard } from "@/components/ui/card" // (optional, not used but handy if you want wrappers)
+import { Pencil, Trash2 } from "lucide-react"
+import type { CardRow as CardRowType } from "@/types/api" // avoid name clash with component
 
-type CardRowProps = {
-  card: CardRowType
-  isSelected?: boolean
-  onSelect?: (id: string) => void
-  onDelete?: (id: string) => void
-  onEdit?: (id: string) => void
+type Props = {
+    card: CardRowType
+    isSelected?: boolean
+    onSelect: (id: string) => void
+    onEdit?: (id: string) => void
+    onDelete?: (id: string) => void
 }
 
-export function CardRow({ card, isSelected, onSelect, onDelete, onEdit }: CardRowProps) {
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect?.(card.id)}
-      className={cn(
-        "group flex w-full items-center justify-between gap-3 rounded-2xl border border-transparent px-4 py-3 text-left transition",
-        isSelected ? "bg-primary/10 text-primary" : "hover:border-border/80 hover:bg-muted/60"
-      )}
-    >
-      <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted">
-          <CreditCard className="h-5 w-5 text-muted-foreground" />
-        </span>
-        <div className="space-y-0.5">
-          <p className="text-sm font-semibold text-foreground">{card.nickname}</p>
-          <p className="text-xs text-muted-foreground">
-            {card.issuer} •••• {card.mask}
-          </p>
+export default function CardRow({ card, isSelected = false, onSelect, onEdit, onDelete }: Props) {
+    const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            onSelect(card.id)
+        }
+    }
+
+    const title =
+        card.nickname ||
+        card.productName ||
+        [card.issuer, card.network].filter(Boolean).join(" ") ||
+        "Credit card"
+
+    const mask = card.account_mask ? `•••• ${card.account_mask}` : "•••• •••• •••• ••••"
+    const expires = card.expires ? `Exp ${card.expires}` : undefined
+
+    return (
+        <div
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(card.id)}
+            onKeyDown={handleKeyDown}
+            aria-selected={isSelected}
+            className={[
+                "group flex w-full items-center justify-between gap-3 rounded-2xl border",
+                "border-border/70 bg-white/60 p-3 transition hover:bg-muted/60 dark:bg-zinc-900/50",
+                isSelected ? "ring-2 ring-primary/70" : "",
+            ].join(" ")}
+        >
+            <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold">{title}</span>
+                    {card.status ? (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              {card.status}
+            </span>
+                    ) : null}
+                </div>
+                <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                    {mask}
+                    {expires ? <span className="ml-2">• {expires}</span> : null}
+                </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1.5">
+                {onEdit ? (
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                            e.stopPropagation()
+                            onEdit(card.id)
+                        }}
+                        aria-label="Edit card"
+                        title="Edit card"
+                    >
+                        <Pencil className="h-4 w-4" />
+                    </Button>
+                ) : null}
+
+                {onDelete ? (
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                            e.stopPropagation()
+                            onDelete(card.id)
+                        }}
+                        aria-label="Remove card"
+                        title="Remove card"
+                    >
+                        <Trash2 className="h-4 w-4" />
+                    </Button>
+                ) : null}
+            </div>
         </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">{card.status}</span>
-        {onEdit ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground"
-            onClick={(event) => {
-              event.stopPropagation()
-              onEdit(card.id)
-            }}
-          >
-            <Edit className="h-4 w-4" />
-            <span className="sr-only">Edit card</span>
-          </Button>
-        ) : null}
-        {onDelete ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground"
-            onClick={(event) => {
-              event.stopPropagation()
-              onDelete(card.id)
-            }}
-          >
-            <Trash2 className="h-4 w-4" />
-            <span className="sr-only">Remove card</span>
-          </Button>
-        ) : null}
-      </div>
-    </button>
-  )
+    )
 }

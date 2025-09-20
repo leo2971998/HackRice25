@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type UseQueryOptions } from "@tanstack/react-query"
 
 import { apiFetch } from "@/lib/api-client"
-import type { CardDetails, CardRow } from "@/types/api"
+import type { CardDetails, CardRow, CreditCardProduct } from "@/types/api"
 
 type QueryOpts<TData> = Omit<UseQueryOptions<TData, Error, TData, unknown[]>, "queryKey" | "queryFn">
 type MutationOpts<TData, TVariables> = Omit<UseMutationOptions<TData, Error, TVariables, unknown>, "mutationFn">
@@ -10,6 +10,24 @@ export function useCards(options?: QueryOpts<CardRow[]>) {
   return useQuery({
     queryKey: ["cards"],
     queryFn: () => apiFetch<CardRow[]>("/cards"),
+    ...options,
+  })
+}
+
+export function useCardCatalog(
+  params?: { active?: boolean },
+  options?: QueryOpts<CreditCardProduct[]>
+) {
+  const active = params?.active
+  const path =
+    active === undefined
+      ? "/cards/catalog"
+      : `/cards/catalog?active=${active ? "1" : "0"}`
+
+  return useQuery({
+    queryKey: ["card-catalog", { active: active ?? null }],
+    queryFn: () => apiFetch<CreditCardProduct[]>(path),
+    staleTime: 60_000,
     ...options,
   })
 }
