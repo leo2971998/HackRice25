@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import Any, Dict
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
 from flask import Blueprint, jsonify, request, g
 from pymongo.collection import Collection
 
-from ..app import parse_window_days, validate_object_id
+from server.utils import parse_window_days, validate_object_id
 
 
 def _resolve_category_name(raw: Any) -> str:
@@ -23,12 +23,12 @@ def register_home_routes(api_bp: Blueprint, database) -> None:
     def spend_summary():
         user = g.current_user
         window_days = parse_window_days(30)
-        since = datetime.utcnow() - timedelta(days=window_days)
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
 
         match: Dict[str, Any] = {"userId": user["_id"], "date": {"$gte": since}}
         card_ids = request.args.getlist("cardIds")
         if card_ids:
-            object_ids = []
+            object_ids: List = []
             for raw in card_ids:
                 try:
                     object_ids.append(validate_object_id(raw))
@@ -83,16 +83,17 @@ def register_home_routes(api_bp: Blueprint, database) -> None:
     def merchant_breakdown():
         user = g.current_user
         window_days = parse_window_days(90)
-        since = datetime.utcnow() - timedelta(days=window_days)
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
 
         match: Dict[str, Any] = {"userId": user["_id"], "date": {"$gte": since}}
+
         category_filter = request.args.get("category")
         if category_filter:
             match["category"] = category_filter
 
         card_ids = request.args.getlist("cardIds")
         if card_ids:
-            object_ids = []
+            object_ids: List = []
             for raw in card_ids:
                 try:
                     object_ids.append(validate_object_id(raw))
@@ -101,15 +102,15 @@ def register_home_routes(api_bp: Blueprint, database) -> None:
             if object_ids:
                 match["accountId"] = {"$in": object_ids}
 
-        limit_param = request.args.get("limit")
         limit = None
-        if limit_param:
-            try:
+        try:
+            limit_param = request.args.get("limit")
+            if limit_param:
                 parsed = int(limit_param)
-            except (TypeError, ValueError):
-                parsed = None
-            if parsed and parsed > 0:
-                limit = parsed
+                if parsed > 0:
+                    limit = parsed
+        except (TypeError, ValueError):
+            limit = None
 
         pipeline = [
             {"$match": match},
@@ -142,4 +143,3 @@ def register_home_routes(api_bp: Blueprint, database) -> None:
             merchants = merchants[:limit]
 
         return jsonify(merchants)
-

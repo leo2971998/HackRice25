@@ -1,5 +1,6 @@
 import os
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from bson import ObjectId
@@ -13,14 +14,13 @@ from pymongo.errors import DuplicateKeyError
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
-from .routes.home import register_home_routes
-from .routes.rewards import register_rewards_routes
+from server.routes import register_home_routes, register_rewards_routes
+from server.utils import parse_window_days, validate_object_id  # use shared utils
 
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
     load_dotenv = None
-
 
 JWKS_CACHE: Dict[str, Any] = {"keys": []}
 DEFAULT_PREFERENCES: Dict[str, Any] = {
@@ -30,6 +30,8 @@ DEFAULT_PREFERENCES: Dict[str, Any] = {
     "privacy": {"blurAmounts": False},
     "notifications": {"monthly_summary": True, "new_recommendation": True},
 }
+
+logger = logging.getLogger("server.app")
 
 
 def load_environment() -> None:
@@ -115,13 +117,11 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
 
 def ensure_indexes(database) -> None:
     users = database["users"]
-    # Omit custom names so we don't conflict with existing auto names like `auth0_id_1`, `email_1`
     users.create_index([("auth0_id", ASCENDING)], unique=True)
     users.create_index([("email", ASCENDING)], unique=True, sparse=True)
 
     accounts = database["accounts"]
     accounts.create_index([("userId", ASCENDING)])
-    # Match existing composite index EXACTLY (includes sparse + name)
     accounts.create_index(
         [("userId", ASCENDING), ("account_type", ASCENDING), ("account_mask", ASCENDING)],
         unique=True,
@@ -160,14 +160,15 @@ def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, 
 
     user_doc: Optional[Dict[str, Any]] = users.find_one({"auth0_id": auth0_id})
     if user_doc is None:
+        now = datetime.now(timezone.utc)
         new_user = {
             "auth0_id": auth0_id,
             "email": email,
             "name": name,
             "preferences": DEFAULT_PREFERENCES,
             "email_verified": email_verified,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "created_at": now,
+            "updated_at": now,
         }
         try:
             result = users.insert_one(new_user)
@@ -185,7 +186,7 @@ def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, 
         if user_doc.get("email_verified") != email_verified:
             updates["email_verified"] = email_verified
         if updates:
-            updates["updated_at"] = datetime.utcnow()
+            updates["updated_at"] = datetime.now(timezone.utc)
             users.update_one({"_id": user_doc["_id"]}, {"$set": updates})
             user_doc.update(updates)
 
@@ -199,21 +200,10 @@ def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, 
     return user_doc
 
 
-def parse_window_days(default: int = 30) -> int:
-    raw = request.args.get("window", default)
+def validate_object_id_param(value: str) -> ObjectId:
     try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        raise BadRequest("window must be an integer")
-    if value <= 0:
-        raise BadRequest("window must be positive")
-    return value
-
-
-def validate_object_id(value: str) -> ObjectId:
-    try:
-        return ObjectId(value)
-    except Exception as exc:  # pragma: no cover - defensive
+        return validate_object_id(value)
+    except Exception as exc:  # pragma: no cover
         raise NotFound("Resource not found") from exc
 
 
@@ -231,7 +221,10 @@ def format_card_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         "type": doc.get("account_type", "credit_card"),
         "expires": expires,
         "status": doc.get("status", "Active"),
-        "lastSynced": last_sync.isoformat().replace("+00:00", "Z") if isinstance(last_sync, datetime) else None,
+        "lastSynced": (
+            last_sync.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if isinstance(last_sync, datetime) else None
+        ),
     }
 
 
@@ -265,7 +258,7 @@ def calculate_money_moments(window_days: int, txns: Iterable[Dict[str, Any]]) ->
                 {
                     "id": "moment-focus",
                     "title": "Spotlight on your spending",
-                    "body": f"About {share:.0%} of your recent spending went to {top_category[0]}. A small budget tweak could help balance things out.",
+                    "body": f"About {share:.0%} of your recent spending went to {top_category[0]}.",
                     "type": "alert",
                 }
             )
@@ -274,12 +267,12 @@ def calculate_money_moments(window_days: int, txns: Iterable[Dict[str, Any]]) ->
                 {
                     "id": "moment-balance",
                     "title": "Nice balance",
-                    "body": f"No single category dominated—{top_category[0]} was your largest area, but spending stayed well distributed.",
+                    "body": f"No single category dominated — {top_category[0]} was your largest area.",
                     "type": "win",
                 }
             )
 
-    avg_daily = total / window_days
+    avg_daily = total / window_days if window_days > 0 else 0
     if avg_daily > 0:
         moments.append(
             {
@@ -300,7 +293,7 @@ def calculate_money_moments(window_days: int, txns: Iterable[Dict[str, Any]]) ->
             {
                 "id": "moment-merchant",
                 "title": "Frequent stop spotted",
-                "body": f"You visited {top_merchant[0]} {top_merchant[1]} times recently. If it's a favorite, consider setting a spending goal for it.",
+                "body": f"You visited {top_merchant[0]} {top_merchant[1]} times recently.",
                 "type": "tip",
             }
         )
@@ -312,10 +305,28 @@ def create_app() -> Flask:
     load_environment()
     app = Flask(__name__)
 
-    app_settings = get_auth_settings()
-    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
-    CORS(app, resources={r"/api/*": {"origins": allowed_origin}}, supports_credentials=True)
+    # Logging (optional)
+    if not logger.handlers:
+        logging.basicConfig(level=logging.INFO)
 
+    app_settings = get_auth_settings()
+
+    # ---- Robust CORS config ----
+    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
+    CORS(
+        app,
+        resources={
+            r"/api/*": {
+                "origins": [allowed_origin],
+                "methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+                "allow_headers": ["Authorization", "Content-Type"],
+                "max_age": 600,
+            }
+        },
+        supports_credentials=True,
+    )
+
+    # ---- DB ----
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
     ensure_indexes(database)
@@ -328,16 +339,26 @@ def create_app() -> Flask:
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
+    # Explicit preflight responder so OPTIONS always returns 2xx
+    @api_bp.route("/<path:_any>", methods=["OPTIONS"])
+    def _preflight(_any):
+        return ("", 204)
+
+    # Auth (bypass OPTIONS)
     @api_bp.before_request
     def authenticate_request() -> None:
+        if request.method == "OPTIONS":
+            return
         payload = decode_token(app_settings)
         g.current_token = payload
         user_doc = get_or_create_user(database["users"], payload)
         g.current_user = user_doc
 
+    # --- Mount your modular routes ---
     register_home_routes(api_bp, database)
     register_rewards_routes(api_bp, database)
 
+    # -------- Core user + cards + moments --------
     @api_bp.get("/me")
     def get_me():
         user = g.current_user
@@ -353,7 +374,6 @@ def create_app() -> Flask:
     @api_bp.patch("/me")
     def update_me():
         user = g.current_user
-
         payload = request.get_json(silent=True) or {}
         updates: Dict[str, Any] = {}
         if "name" in payload:
@@ -374,8 +394,7 @@ def create_app() -> Flask:
                     "preferences": user.get("preferences", DEFAULT_PREFERENCES),
                 }
             )
-
-        updates["updated_at"] = datetime.utcnow()
+        updates["updated_at"] = datetime.now(timezone.utc)
         database["users"].update_one({"_id": user["_id"]}, {"$set": updates})
         user.update(updates)
         return jsonify(
@@ -390,8 +409,7 @@ def create_app() -> Flask:
     @api_bp.get("/status")
     def get_status():
         user = g.current_user
-        accounts = database["accounts"]
-        has_account = accounts.count_documents({"userId": user["_id"], "account_type": "credit_card"}) > 0
+        has_account = database["accounts"].count_documents({"userId": user["_id"], "account_type": "credit_card"}) > 0
         return jsonify({"hasAccount": has_account})
 
     @api_bp.post("/auth/resend-verification")
@@ -401,21 +419,22 @@ def create_app() -> Flask:
     @api_bp.get("/money-moments")
     def money_moments():
         user = g.current_user
-        window_days = parse_window_days(30)
-        card_ids = request.args.getlist('cardIds')
-        
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
-        
+        # Accept both ?window and ?windowDays
+        window_days = parse_window_days(default_days=30)
+        card_ids = request.args.getlist("cardIds")
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        txn_filter: Dict[str, Any] = {"userId": user["_id"], "date": {"$gte": cutoff}}
+
         if card_ids:
-            # Convert string IDs to ObjectIds and add to filter
             try:
-                object_ids = [validate_object_id(card_id) for card_id in card_ids]
-                transaction_filter["accountId"] = {"$in": object_ids}
-            except:
-                pass  # If invalid IDs, ignore filtering
-                
-        txns = list(database["transactions"].find(transaction_filter))
+                object_ids = [validate_object_id(cid) for cid in card_ids]
+                if object_ids:
+                    txn_filter["accountId"] = {"$in": object_ids}
+            except Exception:
+                pass
+
+        txns = list(database["transactions"].find(txn_filter))
         moments = list(calculate_money_moments(window_days, txns))
         return jsonify(moments)
 
@@ -431,13 +450,9 @@ def create_app() -> Flask:
 
     @api_bp.get("/cards/debug")
     def debug_cards():
-        """Debug endpoint to help troubleshoot card data issues"""
         user = g.current_user
-        
-        # Check all cards in the database
         all_cards = list(database["accounts"].find({"account_type": "credit_card"}))
         user_cards = list(database["accounts"].find({"userId": user["_id"], "account_type": "credit_card"}))
-        
         return jsonify({
             "user_id": str(user["_id"]),
             "user_email": user.get("email"),
@@ -446,52 +461,78 @@ def create_app() -> Flask:
             "all_cards_preview": [
                 {
                     "id": str(card["_id"]),
-                    "userId": str(card.get("userId", "N/A")),
-                    "nickname": card.get("nickname", "N/A"),
-                    "issuer": card.get("issuer", "N/A"),
-                    "account_type": card.get("account_type", "N/A")
-                }
-                for card in all_cards[:10]  # Limit to first 10 for debugging
+                    "userId": str(card.get("userId", "")),
+                    "nickname": card.get("nickname"),
+                    "issuer": card.get("issuer"),
+                    "account_type": card.get("account_type"),
+                } for card in all_cards[:10]
             ],
-            "user_cards": [format_card_row(card) for card in user_cards]
+            "user_cards": [format_card_row(card) for card in user_cards],
         })
 
     @api_bp.post("/cards/import")
     def import_existing_card():
-        """Import an existing card by updating its userId to the current user"""
         user = g.current_user
         payload = request.get_json(silent=True) or {}
         card_id = payload.get("card_id")
-        
         if not card_id:
             raise BadRequest("card_id is required")
-        
-        try:
-            card_object_id = validate_object_id(card_id)
-        except:
-            raise BadRequest("Invalid card_id format")
-            
-        # Find the card
-        card = database["accounts"].find_one({
-            "_id": card_object_id,
-            "account_type": "credit_card"
-        })
-        
+        card_object_id = validate_object_id_param(card_id)
+
+        card = database["accounts"].find_one({"_id": card_object_id, "account_type": "credit_card"})
         if not card:
             raise NotFound("Card not found")
-            
-        # Update the card to belong to the current user
+
         database["accounts"].update_one(
             {"_id": card_object_id},
-            {
-                "$set": {
-                    "userId": user["_id"],
-                    "updated_at": datetime.utcnow()
-                }
-            }
+            {"$set": {"userId": user["_id"], "updated_at": datetime.now(timezone.utc)}},
         )
-        
         return jsonify({"id": str(card_object_id), "message": "Card imported successfully"}), 200
+
+    def get_card_or_404(card_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
+        card = database["accounts"].find_one(
+            {"_id": validate_object_id_param(card_id), "userId": user["_id"], "account_type": "credit_card"}
+        )
+        if not card:
+            raise NotFound("Card not found")
+        return card
+
+    @api_bp.get("/cards/<card_id>")
+    def card_details(card_id: str):
+        user = g.current_user
+        card = get_card_or_404(card_id, user)
+        detail = format_card_row(card)
+        detail["mask"] = card.get("account_mask", "")
+        detail["productName"] = card.get("productName")
+        product = None
+        if not detail.get("productName") and card.get("card_product_id"):
+            product = database["credit_cards"].find_one({"_id": card.get("card_product_id")}) or \
+                      database["credit_cards"].find_one({"product_id": card.get("card_product_id")})
+        if not product and card.get("card_product_id"):
+            product = database["credit_cards"].find_one({"card_product_id": card.get("card_product_id")})
+        if not product:
+            product = database["credit_cards"].find_one({"issuer": card.get("issuer"), "product_name": card.get("nickname")})
+        if product:
+            detail["productName"] = product.get("product_name")
+            detail["features"] = product.get("features", [])
+        window_days = 30
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        txns = list(
+            database["transactions"].find(
+                {"userId": user["_id"], "accountId": card["_id"], "date": {"$gte": cutoff}}
+            )
+        )
+        total, count, by_category = calculate_summary(txns)
+        detail["summary"] = {
+            "windowDays": window_days,
+            "spend": round(total, 2),
+            "txns": count,
+            "byCategory": [
+                {"name": name, "total": round(value, 2)}
+                for name, value in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
+            ],
+        }
+        return jsonify(detail)
 
     @api_bp.post("/cards")
     def add_card():
@@ -512,6 +553,7 @@ def create_app() -> Flask:
             value = mapped_payload.get(key if field != "mask" else "account_mask")
             if value in (None, ""):
                 raise BadRequest(f"{field} is required")
+        now = datetime.now(timezone.utc)
         document = {
             "userId": user["_id"],
             "account_type": "credit_card",
@@ -523,64 +565,17 @@ def create_app() -> Flask:
             "expiry_year": int(mapped_payload["expiry_year"]),
             "card_product_id": mapped_payload.get("card_product_id"),
             "status": payload.get("status", "Active"),
-            "last_sync": payload.get("last_sync"),
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "last_sync": payload.get("last_sync") or now,
+            "created_at": now,
+            "updated_at": now,
         }
         if isinstance(document["last_sync"], str):
             try:
                 document["last_sync"] = datetime.fromisoformat(document["last_sync"].replace("Z", "+00:00"))
             except ValueError:
-                document["last_sync"] = datetime.utcnow()
+                document["last_sync"] = now
         result = database["accounts"].insert_one(document)
         return jsonify({"id": str(result.inserted_id)}), 201
-
-    def get_card_or_404(card_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
-        card = database["accounts"].find_one(
-            {"_id": validate_object_id(card_id), "userId": user["_id"], "account_type": "credit_card"}
-        )
-        if not card:
-            raise NotFound("Card not found")
-        return card
-
-    @api_bp.get("/cards/<card_id>")
-    def card_details(card_id: str):
-        user = g.current_user
-        card = get_card_or_404(card_id, user)
-        detail = format_card_row(card)
-        detail["mask"] = card.get("account_mask", "")
-        detail["productName"] = card.get("productName")
-        if not detail.get("productName") and card.get("card_product_id"):
-            product = database["credit_cards"].find_one({"_id": card.get("card_product_id")})
-            if not product:
-                product = database["credit_cards"].find_one({"product_id": card.get("card_product_id")})
-        else:
-            product = None
-        if not product and card.get("card_product_id"):
-            product = database["credit_cards"].find_one({"card_product_id": card.get("card_product_id")})
-        if not product:
-            product = database["credit_cards"].find_one({"issuer": card.get("issuer"), "product_name": card.get("nickname")})
-        if product:
-            detail["productName"] = product.get("product_name")
-            detail["features"] = product.get("features", [])
-        window_days = 30
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        txns = list(
-            database["transactions"].find(
-                {"userId": user["_id"], "accountId": card["_id"], "date": {"$gte": cutoff}}
-            )
-        )
-        total, count, by_category = calculate_summary(txns)
-        detail["summary"] = {
-            "windowDays": window_days,
-            "spend": round(total, 2),
-            "txns": count,
-            "byCategory": [
-                {"name": name, "total": round(value, 2)}
-                for name, value in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
-            ],
-        }
-        return jsonify(detail)
 
     @api_bp.patch("/cards/<card_id>")
     def update_card(card_id: str):
@@ -598,7 +593,7 @@ def create_app() -> Flask:
             updates["card_product_id"] = payload["card_product_id"]
         if not updates:
             return jsonify(format_card_row(card))
-        updates["updated_at"] = datetime.utcnow()
+        updates["updated_at"] = datetime.now(timezone.utc)
         database["accounts"].update_one({"_id": card["_id"]}, {"$set": updates})
         card.update(updates)
         return jsonify(format_card_row(card))
@@ -644,7 +639,6 @@ def create_app() -> Flask:
 
 
 if __name__ == "__main__":
-    # Create and run the Flask app directly (use Flask CLI in production)
     app = create_app()
     port = int(os.environ.get("PORT", "5001"))
     debug = os.environ.get("FLASK_DEBUG", "1") in ("1", "true", "True")

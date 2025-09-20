@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
+from collections import defaultdict
 
 from flask import Blueprint, jsonify, request, g
 from pymongo.collection import Collection
 
-from ..app import parse_window_days
+from server.utils import parse_window_days
 
 
 def _normalize_rate(value: Any, default: float = 0.0) -> float:
     if isinstance(value, (int, float)):
         rate = float(value)
+        # If someone stored "4" for 4% or "0.04", handle both
         if rate > 1:
-            if rate <= 10:
-                return rate / 100.0
-            if rate <= 100:
-                return rate / 100.0
+            return rate / 100.0
         return rate
     return default
 
@@ -97,9 +95,9 @@ def _annualize(value: float, window_days: int) -> float:
 
 
 def _card_reason_strings(
-    card: Dict[str, Any],
-    category_breakdown: Dict[str, Dict[str, float]],
-    base_rate: float,
+        card: Dict[str, Any],
+        category_breakdown: Dict[str, Dict[str, float]],
+        base_rate: float,
 ) -> List[str]:
     reasons: List[str] = []
     sorted_categories = sorted(
@@ -125,12 +123,12 @@ def _card_reason_strings(
 
 
 def _summarize_rewards(
-    card: Dict[str, Any],
-    card_rules: Dict[str, Any],
-    spend_by_category: Dict[str, float],
-    spend_by_merchant: Dict[str, float],
-    merchant_categories: Dict[str, str],
-    window_days: int,
+        card: Dict[str, Any],
+        card_rules: Dict[str, Any],
+        spend_by_category: Dict[str, float],
+        spend_by_merchant: Dict[str, float],
+        merchant_categories: Dict[str, str],
+        window_days: int,
 ) -> Tuple[float, Dict[str, Dict[str, float]], float]:
     category_rules: List[Dict[str, Any]] = card_rules.get("category", [])
     merchant_rules: List[Dict[str, Any]] = card_rules.get("merchant", [])
@@ -165,10 +163,10 @@ def _summarize_rewards(
 
     for rule in merchant_rules:
         merchant = (
-            rule.get("merchant")
-            or rule.get("merchant_id")
-            or rule.get("merchantId")
-            or rule.get("merchantName")
+                rule.get("merchant")
+                or rule.get("merchant_id")
+                or rule.get("merchantId")
+                or rule.get("merchantName")
         )
         if not isinstance(merchant, str):
             continue
@@ -214,17 +212,19 @@ def register_rewards_routes(api_bp: Blueprint, database) -> None:
     def rewards_estimate():
         user = g.current_user
         window_days = parse_window_days(90)
-        since = datetime.utcnow() - timedelta(days=window_days)
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
 
         match = {"userId": user["_id"], "date": {"$gte": since}}
         transactions_cursor = transactions.find(match)
         spend_by_category: Dict[str, float] = defaultdict(float)
         spend_by_merchant: Dict[str, float] = defaultdict(float)
         merchant_categories: Dict[str, str] = {}
+        total_spend = 0.0
         for txn in transactions_cursor:
             amount = float(txn.get("amount", 0))
             if amount <= 0:
                 continue
+            total_spend += amount
             category = txn.get("category") or "Other"
             merchant = txn.get("merchant_id") or txn.get("description_clean") or txn.get("description") or "Merchant"
             spend_by_category[category] += amount
@@ -337,7 +337,7 @@ def register_rewards_routes(api_bp: Blueprint, database) -> None:
     def rewards_recommendations():
         user = g.current_user
         window_days = parse_window_days(90)
-        since = datetime.utcnow() - timedelta(days=window_days)
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
         top_param = request.args.get("top", "5")
         try:
             top_n = int(top_param)
@@ -416,4 +416,3 @@ def register_rewards_routes(api_bp: Blueprint, database) -> None:
 
         ranked = sorted(recommendations, key=lambda item: item["estAnnualValue"], reverse=True)[:top_n]
         return jsonify({"ranked": ranked})
-
