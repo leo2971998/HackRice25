@@ -6,16 +6,15 @@ import { NAV_LINKS } from "@/routes/links"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "./ThemeToggle"
-import { useCurrentUser } from "@/hooks/useCurrentUser"
+import { useMe } from "@/hooks/useApi"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth0()
-  const { data: profile } = useCurrentUser()
+  const { data: me } = useMe()
 
-  const displayName = profile?.name ?? user?.name ?? "Swipe Coach member"
-  const displayEmail = profile?.email ?? user?.email
+  const displayName = me?.name?.trim() || user?.name || (me?.email ? me.email.split("@")[0] : "Swipe Coach member")
+  const displayEmail = me?.email ?? user?.email
   const avatarUrl = user?.picture
-
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-primary/5 via-background to-background">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
@@ -26,7 +25,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </span>
             <div className="flex flex-col leading-tight">
               <span>Swipe Coach</span>
-              <span className="text-xs font-medium text-muted-foreground">Auth0-powered spending insights</span>
+              <span className="text-xs font-medium text-muted-foreground">Personalised card coaching</span>
             </div>
           </NavLink>
           <nav className="hidden items-center gap-1 rounded-full border border-border/60 bg-white/70 p-1 text-sm shadow-sm backdrop-blur md:flex dark:bg-zinc-900/60">
@@ -37,9 +36,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 className={({ isActive }) =>
                   cn(
                     "flex items-center gap-2 rounded-full px-3 py-1.5 transition-all",
-                    isActive
-                      ? "bg-primary text-primary-foreground shadow-soft"
-                      : "text-muted-foreground hover:text-foreground"
+                    isActive ? "bg-primary text-primary-foreground shadow-soft" : "text-muted-foreground hover:text-foreground"
                   )
                 }
               >
@@ -69,17 +66,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <main className="container flex-1 space-y-8 pb-16 pt-10">
         <section className="rounded-3xl border border-border/60 bg-white/70 p-6 shadow-soft backdrop-blur dark:bg-zinc-900/60">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+            <div className="space-y-1">
               <p className="text-sm font-medium text-muted-foreground">Signed in as</p>
               <p className="text-xl font-semibold text-foreground">{displayName}</p>
               {displayEmail ? <p className="text-sm text-muted-foreground">{displayEmail}</p> : null}
             </div>
             {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt={displayName}
-                className="h-14 w-14 rounded-full border border-border/60 object-cover"
-              />
+              <img src={avatarUrl} alt={displayName} className="h-14 w-14 rounded-full border border-border/60 object-cover" />
             ) : null}
           </div>
         </section>
