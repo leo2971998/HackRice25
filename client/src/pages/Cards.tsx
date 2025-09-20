@@ -1,4 +1,4 @@
-import * as React from "react";
+import { useState, useEffect } from "react";
 import { Plus, CreditCard, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import axios from "axios";
 // If you use Auth0, you can later import useAuth0 and call getAccessTokenSilently for API calls.
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+
+export const api = axios.create({
+  baseURL: API_BASE,
+  headers: { "Content-Type": "application/json" },
+});
 
 type CardOnFile = {
   id: string;
@@ -29,16 +37,6 @@ type CardOnFile = {
   last4: string; // "1234"
   expires: string; // "03/29"
 };
-
-const ISSUERS = [
-  "American Express",
-  "Chase",
-  "Capital One",
-  "Citi",
-  "Bank of America",
-  "Discover",
-];
-const NETWORKS = ["Amex", "Visa", "Mastercard", "Discover"];
 
 // mock initial card
 const INITIAL: CardOnFile[] = [
@@ -53,16 +51,21 @@ const INITIAL: CardOnFile[] = [
 ];
 
 export default function CardsPage() {
-  const [cards, setCards] = React.useState<CardOnFile[]>(INITIAL);
+  const [cards, setCards] = useState<CardOnFile[]>(INITIAL);
 
   // dialog state
-  const [open, setOpen] = React.useState(false);
-  const [product, setProduct] = React.useState("");
-  const [issuer, setIssuer] = React.useState("");
-  const [network, setNetwork] = React.useState("");
-  const [last4, setLast4] = React.useState("");
-  const [expMM, setExpMM] = React.useState("");
-  const [expYY, setExpYY] = React.useState("");
+  const [open, setOpen] = useState(false);
+
+  const [issuers, setIssuers] = useState<string[]>([]);
+  const [networks, setNetworks] = useState<string[]>([]);
+  const [products, setProducts] = useState<string[]>([]);
+
+  const [product, setProduct] = useState("");
+  const [issuer, setIssuer] = useState("");
+  const [network, setNetwork] = useState("");
+  const [last4, setLast4] = useState("");
+  const [expMM, setExpMM] = useState("");
+  const [expYY, setExpYY] = useState("");
 
   const resetForm = () => {
     setProduct("");
@@ -105,6 +108,50 @@ export default function CardsPage() {
   const removeCard = (id: string) =>
     setCards((c) => c.filter((x) => x.id !== id));
 
+  useEffect(() => {
+    const loadIssuers = async () => {
+      const res = await api.get<string[]>("/api/issuers");
+      setIssuers(res.data);
+    };
+    loadIssuers();
+  }, []);
+
+  useEffect(() => {
+    if (!issuer) {
+      setNetworks([]);
+      setProducts([]);
+      setNetwork("");
+      setProduct("");
+      return;
+    }
+
+    // networks for the issuer
+    api
+      .get<string[]>("/api/networks", { params: { issuer } })
+      .then((r) => setNetworks(r.data));
+
+    // products for the issuer (no network filter yet)
+    api
+      .get<string[]>("/api/products", { params: { issuer } })
+      .then((r) => setProducts(r.data));
+
+    // reset selections
+    setNetwork("");
+    setProduct("");
+  }, [issuer]);
+
+  useEffect(() => {
+    if (!issuer) return;
+    const params: any = { issuer };
+    if (network) params.network = network;
+
+    api
+      .get<string[]>("/api/products", { params })
+      .then((r) => setProducts(r.data));
+
+    setProduct("");
+  }, [network, issuer]);
+
   return (
     <div className="container max-w-[960px] lg:max-w-[1080px] space-y-6 sm:space-y-8">
       <div className="flex items-center justify-between">
@@ -130,7 +177,7 @@ export default function CardsPage() {
                       <SelectValue placeholder="Select issuer" />
                     </SelectTrigger>
                     <SelectContent>
-                      {ISSUERS.map((i) => (
+                      {issuers.map((i) => (
                         <SelectItem key={i} value={i}>
                           {i}
                         </SelectItem>
@@ -140,12 +187,20 @@ export default function CardsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="network">Network</Label>
-                  <Select value={network} onValueChange={setNetwork}>
+                  <Select
+                    value={network}
+                    onValueChange={setNetwork}
+                    disabled={!issuer}
+                  >
                     <SelectTrigger id="network">
-                      <SelectValue placeholder="Select network" />
+                      <SelectValue
+                        placeholder={
+                          issuer ? "Select network" : "Pick issuer first"
+                        }
+                      />
                     </SelectTrigger>
                     <SelectContent>
-                      {NETWORKS.map((n) => (
+                      {networks.map((n) => (
                         <SelectItem key={n} value={n}>
                           {n}
                         </SelectItem>
@@ -157,12 +212,27 @@ export default function CardsPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="product">Card product</Label>
-                <Input
-                  id="product"
-                  placeholder="e.g., Sapphire Preferred"
+                <Label htmlFor="product">Card product</Label>
+                <Select
                   value={product}
-                  onChange={(e) => setProduct(e.target.value)}
-                />
+                  onValueChange={setProduct}
+                  disabled={!issuer || products.length === 0}
+                >
+                  <SelectTrigger id="product">
+                    <SelectValue
+                      placeholder={
+                        issuer ? "Select product" : "Pick issuer first"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {products.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid sm:grid-cols-3 gap-4">
