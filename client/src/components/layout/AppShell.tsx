@@ -6,11 +6,12 @@ import { NAV_LINKS } from "@/routes/links"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "./ThemeToggle"
-import { useMe } from "@/hooks/useApi"
+import { useAuthWiring, useMe } from "@/hooks/useApi"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth0()
   const { data: me } = useMe()
+  useAuthWiring()
 
   const displayName = me?.name?.trim() || user?.name || (me?.email ? me.email.split("@")[0] : "Swipe Coach member")
   const displayEmail = me?.email ?? user?.email

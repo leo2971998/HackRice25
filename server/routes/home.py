@@ -19,6 +19,23 @@ def register_home_routes(api_bp: Blueprint, database) -> None:
     transactions: Collection = database["transactions"]
     accounts: Collection = database["accounts"]
 
+    @api_bp.get("/home/spend-summary")
+    def home_spend_summary():
+        user = g.current_user
+        window_days = parse_window_days(30)
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
+
+        match: Dict[str, Any] = {"userId": user["_id"], "date": {"$gte": since}}
+        pipeline = [
+            {"$match": match},
+            {"$group": {"_id": "$category", "amount": {"$sum": "$amount"}}},
+            {"$project": {"_id": 0, "category": {"$ifNull": ["$_id", "Uncategorized"]}, "amount": {"$round": ["$amount", 2]}}},
+            {"$sort": {"amount": -1}},
+        ]
+        rows = list(transactions.aggregate(pipeline))
+        total = round(sum(row["amount"] for row in rows), 2)
+        return jsonify({"total": total, "byCategory": rows})
+
     @api_bp.get("/spend/summary")
     def spend_summary():
         user = g.current_user

@@ -1,141 +1,190 @@
-import { useState } from "react"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/Label"
-import { useAddCard } from "@/hooks/useCards"
-import { useToast } from "@/components/ui/use-toast"
+import { useEffect, useMemo, useState } from "react"
+import { useAddCard } from "@/hooks/useApi"
 
-export type AddCardDialogProps = {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+const ISSUERS = [
+  "American Express",
+  "Chase",
+  "Citi",
+  "Capital One",
+  "Discover",
+  "Bank of America",
+  "Wells Fargo",
+  "Barclays",
+  "US Bank",
+  "Synchrony",
+  "Other",
+]
+
+function luhnCheck(num: string): boolean {
+  // digits only
+  const s = num.replace(/\D/g, "")
+  if (s.length < 12 || s.length > 19) return false
+  let sum = 0,
+    dbl = false
+  for (let i = s.length - 1; i >= 0; i--) {
+    let n = Number(s[i])
+    if (dbl) {
+      n *= 2
+      if (n > 9) n -= 9
+    }
+    sum += n
+    dbl = !dbl
+  }
+  return sum % 10 === 0
 }
 
-export function AddCardDialog({ open, onOpenChange }: AddCardDialogProps) {
-  const { toast } = useToast()
-  const [nickname, setNickname] = useState("")
+function maskPreview(full: string): string {
+  const digits = full.replace(/\D/g, "")
+  const last4 = digits.slice(-4)
+  return last4 ? `•••• •••• •••• ${last4}` : "•••• •••• •••• ••••"
+}
+
+export function AddCardDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [issuer, setIssuer] = useState("")
+  const [nickname, setNickname] = useState("")
   const [network, setNetwork] = useState("")
-  const [mask, setMask] = useState("")
-  const [expiryMonth, setExpiryMonth] = useState("")
-  const [expiryYear, setExpiryYear] = useState("")
-  const [productId, setProductId] = useState("")
-  const addCard = useAddCard({
-    onSuccess: () => {
-      toast({
-        title: "Card added",
-        description: "We’ll start tracking spend on this card right away.",
-      })
-      onOpenChange(false)
-      setNickname("")
+  const [expiryMonth, setExpiryMonth] = useState<number | "">("")
+  const [expiryYear, setExpiryYear] = useState<number | "">("")
+  const [fullNumber, setFullNumber] = useState("")
+
+  const last4 = useMemo(() => fullNumber.replace(/\D/g, "").slice(-4), [fullNumber])
+  const masked = useMemo(() => maskPreview(fullNumber), [fullNumber])
+
+  const valid =
+    issuer.trim().length > 0 &&
+    luhnCheck(fullNumber) &&
+    (expiryMonth === "" || (Number(expiryMonth) >= 1 && Number(expiryMonth) <= 12)) &&
+    (expiryYear === "" || String(expiryYear).length >= 2)
+
+  const addCard = useAddCard()
+
+  useEffect(() => {
+    if (!open) {
       setIssuer("")
+      setNickname("")
       setNetwork("")
-      setMask("")
       setExpiryMonth("")
       setExpiryYear("")
-      setProductId("")
-    },
-    onError: (error) => {
-      toast({
-        title: "Unable to add card",
-        description: error.message || "Please try again in a moment.",
-      })
-    },
-  })
+      setFullNumber("")
+    }
+  }, [open])
 
-  const canSubmit =
-    nickname.trim() &&
-    issuer.trim() &&
-    network.trim() &&
-    mask.trim().length === 4 &&
-    expiryMonth.trim().length === 2 &&
-    expiryYear.trim().length === 4
+  if (!open) return null
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px]">
-        <DialogHeader>
-          <DialogTitle>Link a new card</DialogTitle>
-          <DialogDescription>
-            Add the nickname and last four digits to keep your wallet organised.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4 py-2">
-          <div className="grid gap-2">
-            <Label htmlFor="nickname">Nickname</Label>
-            <Input id="nickname" value={nickname} onChange={(event) => setNickname(event.target.value)} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="issuer">Issuer</Label>
-            <Input id="issuer" value={issuer} onChange={(event) => setIssuer(event.target.value)} placeholder="e.g. Chase" />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="network">Network</Label>
-            <Input id="network" value={network} onChange={(event) => setNetwork(event.target.value)} placeholder="Visa" />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="mask">Last 4 digits</Label>
-            <Input id="mask" value={mask} onChange={(event) => setMask(event.target.value.replace(/[^0-9]/g, ""))} maxLength={4} />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="expiryMonth">Expiry month</Label>
-              <Input
-                id="expiryMonth"
-                value={expiryMonth}
-                onChange={(event) => setExpiryMonth(event.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
-                placeholder="03"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="expiryYear">Expiry year</Label>
-              <Input
-                id="expiryYear"
-                value={expiryYear}
-                onChange={(event) => setExpiryYear(event.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
-                placeholder="2029"
-              />
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="productId">Card product (optional)</Label>
-            <Input
-              id="productId"
-              value={productId}
-              onChange={(event) => setProductId(event.target.value)}
-              placeholder="cc_prod_platinum"
-            />
-          </div>
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">Add Card</h2>
+          <button className="text-gray-500 hover:text-black" onClick={onClose}>
+            ✕
+          </button>
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+
+        <div className="space-y-3">
+          <label className="block">
+            <span className="text-sm text-gray-700">Issuer</span>
+            <select
+              className="mt-1 w-full border rounded-lg px-3 py-2"
+              value={issuer}
+              onChange={(e) => setIssuer(e.target.value)}
+            >
+              <option value="">Select an issuer…</option>
+              {ISSUERS.map((x) => (
+                <option key={x} value={x}>
+                  {x}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-sm text-gray-700">Nickname (optional)</span>
+            <input
+              className="mt-1 w-full border rounded-lg px-3 py-2"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              placeholder="e.g., Sapphire Dining"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-sm text-gray-700">Network (optional)</span>
+            <input
+              className="mt-1 w-full border rounded-lg px-3 py-2"
+              value={network}
+              onChange={(e) => setNetwork(e.target.value)}
+              placeholder="Visa / MasterCard / Amex"
+            />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-sm text-gray-700">Expiry Month (MM)</span>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+                value={expiryMonth}
+                onChange={(e) => setExpiryMonth(e.target.value === "" ? "" : Number(e.target.value))}
+                placeholder="MM"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-gray-700">Expiry Year (YY or YYYY)</span>
+              <input
+                type="number"
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+                value={expiryYear}
+                onChange={(e) => setExpiryYear(e.target.value === "" ? "" : Number(e.target.value))}
+                placeholder="YYYY"
+              />
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="text-sm text-gray-700">Full Card Number</span>
+            <input
+              className="mt-1 w-full border rounded-lg px-3 py-2"
+              value={fullNumber}
+              onChange={(e) => setFullNumber(e.target.value)}
+              inputMode="numeric"
+              autoComplete="cc-number"
+              placeholder="1234 5678 9012 3456"
+            />
+            <div className="text-xs text-gray-500 mt-1">
+              We only keep the last 4. Preview: <span className="font-mono">{masked}</span>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <button className="px-4 py-2 rounded-lg border" onClick={onClose}>
             Cancel
-          </Button>
-          <Button
-            onClick={() =>
-              addCard.mutate({
-                nickname: nickname.trim(),
-                issuer: issuer.trim(),
-                network: network.trim(),
-                mask: mask.trim(),
-                expiry_month: Number(expiryMonth),
-                expiry_year: Number(expiryYear),
-                card_product_id: productId.trim() || undefined,
-              })
-            }
-            disabled={!canSubmit || addCard.isPending}
+          </button>
+          <button
+            className="px-4 py-2 rounded-lg bg-black text-white disabled:opacity-50"
+            disabled={!valid || addCard.isPending}
+            onClick={async () => {
+              const payload = {
+                issuer,
+                nickname: nickname || undefined,
+                network: network || undefined,
+                expiry_month: expiryMonth === "" ? undefined : Number(expiryMonth),
+                expiry_year: expiryYear === "" ? undefined : Number(expiryYear),
+                last4,
+                account_mask: masked,
+              }
+              await addCard.mutateAsync(payload)
+              setFullNumber("")
+              onClose()
+            }}
           >
-            {addCard.isPending ? "Adding…" : "Add card"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            {addCard.isPending ? "Saving…" : "Save Card"}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

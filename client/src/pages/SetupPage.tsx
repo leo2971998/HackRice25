@@ -53,7 +53,7 @@ export function SetupPage() {
           )}
         </CardContent>
       </Card>
-      <AddCardDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <AddCardDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </div>
   )
 }

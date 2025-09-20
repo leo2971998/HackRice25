@@ -1,15 +1,18 @@
+import { useEffect } from "react"
+import { useAuth0 } from "@auth0/auth0-react"
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type UseQueryOptions } from "@tanstack/react-query"
 
-import { apiFetch } from "@/lib/api-client"
+import { apiFetch, setAccessTokenProvider } from "@/lib/apiClient"
+import { authConfig } from "@/lib/env"
 import type {
   CardRecommendation,
-  CardRow,
+  CardRow as LegacyCardRow,
   CashbackEstimate,
-  Me,
+  Me as LegacyMe,
   MerchantBreakdownRow,
   MoneyMoment,
   Preferences,
-  SpendSummary,
+  SpendSummary as LegacySpendSummary,
 } from "@/types/api"
 
 const DEFAULT_STALE_TIME = 60_000
@@ -18,19 +21,71 @@ type QueryOpts<TData> = Omit<UseQueryOptions<TData, Error, TData, unknown[]>, "q
 
 type MutationOpts<TData, TVariables> = Omit<UseMutationOptions<TData, Error, TVariables, unknown>, "mutationFn">
 
-export function useMe(options?: QueryOpts<Me>) {
+export type Me = {
+  _id?: string
+  userId?: string
+  email: string
+  name?: string
+  preferences?: Preferences
+}
+
+export type SpendSummary = {
+  total: number
+  byCategory: Array<{ category: string; amount: number }>
+}
+
+export type CardRow = {
+  _id: string
+  issuer: string
+  nickname?: string
+  network?: string
+  last4: string
+  account_mask?: string
+  expiry_month?: number
+  expiry_year?: number
+}
+
+export function useAuthWiring() {
+  const { getAccessTokenSilently, isAuthenticated } = useAuth0()
+  useEffect(() => {
+    const authorizationParams: Record<string, string> = {}
+    if (authConfig.audience) {
+      authorizationParams.audience = authConfig.audience
+    }
+    setAccessTokenProvider(async () => {
+      if (!isAuthenticated) return null
+      try {
+        return await getAccessTokenSilently({ authorizationParams })
+      } catch {
+        return null
+      }
+    })
+    return () => {
+      setAccessTokenProvider(async () => null)
+    }
+  }, [getAccessTokenSilently, isAuthenticated])
+}
+
+export function useMe(options?: QueryOpts<LegacyMe>) {
   return useQuery({
     queryKey: ["me"],
-    queryFn: () => apiFetch<Me>("/me"),
+    queryFn: () => apiFetch<LegacyMe>("/me"),
     staleTime: DEFAULT_STALE_TIME,
     ...options,
   })
 }
 
-export function useCategorySummary(windowDays = 30, options?: QueryOpts<SpendSummary>) {
+export function useSpendSummary() {
+  return useQuery({
+    queryKey: ["spendSummary"],
+    queryFn: () => apiFetch<SpendSummary>("/home/spend-summary"),
+  })
+}
+
+export function useCategorySummary(windowDays = 30, options?: QueryOpts<LegacySpendSummary>) {
   return useQuery({
     queryKey: ["spend-summary", { windowDays }],
-    queryFn: () => apiFetch<SpendSummary>(`/spend/summary?window=${windowDays}`),
+    queryFn: () => apiFetch<LegacySpendSummary>(`/spend/summary?window=${windowDays}`),
     ...options,
   })
 }
@@ -71,6 +126,35 @@ export function useCashbackEstimate(params?: { windowDays?: number }, options?: 
   })
 }
 
+export function useCards() {
+  return useQuery({
+    queryKey: ["cards"],
+    queryFn: () => apiFetch<CardRow[]>("/cards"),
+  })
+}
+
+export function useAddCard() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      issuer: string
+      nickname?: string
+      network?: string
+      expiry_month?: number
+      expiry_year?: number
+      last4: string
+      account_mask: string
+    }) =>
+      apiFetch<CardRow>("/cards", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["cards"] })
+    },
+  })
+}
+
 export function useRecommendations(
   params?: { windowDays?: number; topN?: number },
   options?: QueryOpts<{ ranked: CardRecommendation[] }>
@@ -86,22 +170,22 @@ export function useRecommendations(
   })
 }
 
-export function useAccounts(options?: QueryOpts<CardRow[]>) {
+export function useAccounts(options?: QueryOpts<LegacyCardRow[]>) {
   return useQuery({
     queryKey: ["cards"],
-    queryFn: () => apiFetch<CardRow[]>("/cards"),
+    queryFn: () => apiFetch<LegacyCardRow[]>("/cards"),
     ...options,
   })
 }
 
-type UpdateMePayload = Partial<Pick<Me, "name"> & { preferences: Partial<Preferences> }>
+type UpdateMePayload = Partial<Pick<LegacyMe, "name"> & { preferences: Partial<Preferences> }>
 
-export function useUpdateMe(options?: MutationOpts<Me, UpdateMePayload>) {
+export function useUpdateMe(options?: MutationOpts<LegacyMe, UpdateMePayload>) {
   const queryClient = useQueryClient()
   const { onSuccess, ...rest } = options ?? {}
   return useMutation({
     mutationFn: (payload: UpdateMePayload) =>
-      apiFetch<Me>("/me", {
+      apiFetch<LegacyMe>("/me", {
         method: "PATCH",
         body: JSON.stringify(payload),
       }),

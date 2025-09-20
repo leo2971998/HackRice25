@@ -4,7 +4,7 @@ import { Auth0Provider, useAuth0 } from "@auth0/auth0-react"
 import { useNavigate } from "react-router-dom"
 
 import { authConfig } from "@/lib/env"
-import { setTokenGetter } from "@/lib/api-client"
+import { setAccessTokenProvider } from "@/lib/apiClient"
 
 function TokenBridge() {
   const { getAccessTokenSilently, isAuthenticated } = useAuth0()
@@ -15,7 +15,7 @@ function TokenBridge() {
       authorizationParams.audience = authConfig.audience
     }
 
-    setTokenGetter(async () => {
+    setAccessTokenProvider(async () => {
       if (!isAuthenticated) {
         return null
       }
@@ -23,7 +23,7 @@ function TokenBridge() {
     })
 
     return () => {
-      setTokenGetter(null)
+      setAccessTokenProvider(async () => null)
     }
   }, [getAccessTokenSilently, isAuthenticated])
 

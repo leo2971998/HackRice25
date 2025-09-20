@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type UseQueryOptions } from "@tanstack/react-query"
 
-import { apiFetch } from "@/lib/api-client"
+import { apiFetch } from "@/lib/apiClient"
 import type { CardDetails, CardRow } from "@/types/api"
 
 type QueryOpts<TData> = Omit<UseQueryOptions<TData, Error, TData, unknown[]>, "queryKey" | "queryFn">

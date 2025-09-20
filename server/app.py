@@ -311,20 +311,19 @@ def create_app() -> Flask:
 
     app_settings = get_auth_settings()
 
-    # ---- Robust CORS config ----
-    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
     CORS(
         app,
-        resources={
-            r"/api/*": {
-                "origins": [allowed_origin],
-                "methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-                "allow_headers": ["Authorization", "Content-Type"],
-                "max_age": 600,
-            }
-        },
+        resources={r"/api/*": {"origins": "*"}},
         supports_credentials=True,
+        allow_headers=["Content-Type", "Authorization"],
+        expose_headers=["Content-Type", "Authorization"],
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
+
+    @app.before_request
+    def _short_circuit_options():
+        if request.method == "OPTIONS":
+            return ("", 204)
 
     # ---- DB ----
     mongo_client = get_mongo_client()
@@ -446,7 +445,26 @@ def create_app() -> Flask:
             .find({"userId": user["_id"], "account_type": "credit_card"})
             .sort("nickname", ASCENDING)
         )
-        return jsonify([format_card_row(card) for card in cards])
+        output = []
+        for card in cards:
+            last4 = card.get("last4")
+            mask = card.get("account_mask") or ""
+            if not last4 and mask:
+                digits = "".join(ch for ch in mask if ch.isdigit())
+                last4 = digits[-4:] if digits else None
+            output.append(
+                {
+                    "_id": str(card["_id"]),
+                    "issuer": card.get("issuer", ""),
+                    "nickname": card.get("nickname"),
+                    "network": card.get("network"),
+                    "last4": last4 or "",
+                    "account_mask": mask or None,
+                    "expiry_month": card.get("expiry_month"),
+                    "expiry_year": card.get("expiry_year"),
+                }
+            )
+        return jsonify(output)
 
     @api_bp.get("/cards/debug")
     def debug_cards():
@@ -537,45 +555,58 @@ def create_app() -> Flask:
     @api_bp.post("/cards")
     def add_card():
         user = g.current_user
-        payload = request.get_json(silent=True) or {}
-        required_fields = ["nickname", "issuer", "network", "mask", "expiry_month", "expiry_year"]
-        mapped_payload = {
-            "nickname": payload.get("nickname"),
-            "issuer": payload.get("issuer"),
-            "network": payload.get("network"),
-            "account_mask": payload.get("mask") or payload.get("account_mask"),
-            "expiry_month": payload.get("expiry_month"),
-            "expiry_year": payload.get("expiry_year"),
-            "card_product_id": payload.get("card_product_id"),
-        }
-        for field in required_fields:
-            key = "account_mask" if field == "mask" else field
-            value = mapped_payload.get(key if field != "mask" else "account_mask")
+        body = request.get_json(silent=True) or {}
+
+        if "full_card_number" in body:
+            return jsonify({"error": "Do not send full card number"}), 400
+
+        issuer = body.get("issuer")
+        last4 = body.get("last4")
+        account_mask = body.get("account_mask")
+        nickname = body.get("nickname")
+        network = body.get("network")
+        expiry_month = body.get("expiry_month")
+        expiry_year = body.get("expiry_year")
+
+        if not issuer or not last4 or not account_mask:
+            return jsonify({"error": "issuer, last4, and account_mask are required"}), 400
+
+        def _to_int_or_none(value):
             if value in (None, ""):
-                raise BadRequest(f"{field} is required")
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
         now = datetime.now(timezone.utc)
         document = {
             "userId": user["_id"],
             "account_type": "credit_card",
-            "nickname": mapped_payload["nickname"],
-            "issuer": mapped_payload["issuer"],
-            "network": mapped_payload["network"],
-            "account_mask": str(mapped_payload["account_mask"]),
-            "expiry_month": int(mapped_payload["expiry_month"]),
-            "expiry_year": int(mapped_payload["expiry_year"]),
-            "card_product_id": mapped_payload.get("card_product_id"),
-            "status": payload.get("status", "Active"),
-            "last_sync": payload.get("last_sync") or now,
+            "issuer": issuer,
+            "nickname": nickname,
+            "network": network,
+            "last4": str(last4)[-4:],
+            "account_mask": account_mask,
+            "expiry_month": _to_int_or_none(expiry_month),
+            "expiry_year": _to_int_or_none(expiry_year),
+            "status": "active",
             "created_at": now,
             "updated_at": now,
         }
-        if isinstance(document["last_sync"], str):
-            try:
-                document["last_sync"] = datetime.fromisoformat(document["last_sync"].replace("Z", "+00:00"))
-            except ValueError:
-                document["last_sync"] = now
+
         result = database["accounts"].insert_one(document)
-        return jsonify({"id": str(result.inserted_id)}), 201
+        created = {
+            "_id": str(result.inserted_id),
+            "issuer": issuer,
+            "nickname": nickname,
+            "network": network,
+            "last4": str(last4)[-4:],
+            "account_mask": account_mask,
+            "expiry_month": document.get("expiry_month"),
+            "expiry_year": document.get("expiry_year"),
+        }
+        return jsonify(created), 201
 
     @api_bp.patch("/cards/<card_id>")
     def update_card(card_id: str):
