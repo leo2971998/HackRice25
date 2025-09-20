@@ -37,15 +37,50 @@ DEFAULT_PREFERENCES: Dict[str, Any] = {
 
 def safe_create_index(coll, keys, **opts):
     """
-    Create an index but gracefully ignore Mongo's
-    IndexOptionsConflict (code 85), which occurs when an index with
-    the same key pattern exists under a different name/options.
+    Create an index but gracefully:
+    - ignore IndexOptionsConflict (code 85),
+    - handle IndexKeySpecsConflict (code 86) by dropping the conflicting named index
+      and recreating it with the requested options.
     """
+    from pymongo.errors import OperationFailure
+
+    requested_name = opts.get("name")
     try:
         return coll.create_index(keys, **opts)
     except OperationFailure as e:
-        if getattr(e, "code", None) == 85:  # IndexOptionsConflict
+        code = getattr(e, "code", None)
+
+        # Already exists with different options but different auto-name (OK to ignore)
+        if code == 85:  # IndexOptionsConflict
             return None
+
+        # Same name exists but options differ (e.g., unique vs non-unique) -> drop & recreate
+        if code == 86:  # IndexKeySpecsConflict
+            # If a name was not provided, infer Mongo's auto-generated name
+            if not requested_name:
+                # Mongo's default name format matches what the error shows (e.g., "userId_1_product_slug_1")
+                # Build it deterministically the same way:
+                parts = []
+                for k, direction in keys:
+                    parts.append(f"{k}_{int(direction)}")
+                requested_name = "_".join(parts)
+
+            try:
+                if requested_name:
+                    coll.drop_index(requested_name)
+                else:
+                    # last resort: drop all indexes with same key pattern
+                    info = coll.index_information()
+                    for name, spec in info.items():
+                        if spec.get("key") == keys:
+                            coll.drop_index(name)
+                # retry create
+                return coll.create_index(keys, **opts)
+            except OperationFailure:
+                # if drop or recreate still fails, re-raise original for visibility
+                raise e
+
+        # anything else: bubble up
         raise
 
 def load_environment() -> None:
@@ -187,6 +222,7 @@ def ensure_indexes(database) -> None:
         [("userId", ASCENDING), ("product_slug", ASCENDING)],
         unique=True,
         sparse=True,
+        name="userId_1_product_slug_1",  # explicit to match/replace the conflicting one
     )
 
     # mandates
@@ -535,39 +571,7 @@ def create_app() -> Flask:
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
-    @api_bp.route("/applications", methods=["POST", "OPTIONS"])
-    def create_application():
-        # Let preflight through
-        if request.method == "OPTIONS":
-            return ("", 204)
 
-        user = g.current_user
-        data = request.get_json(silent=True) or {}
-
-        card_id = data.get("card_id")
-        product_slug = data.get("product_slug")
-        source = (data.get("source") or "cards_page_apply_button")
-
-        if not card_id and not product_slug:
-            raise BadRequest("Provide card_id or product_slug")
-
-        # Optional: try to coerce card_id to ObjectId if present
-        card_oid = None
-        if card_id:
-            try:
-                card_oid = ObjectId(card_id)
-            except Exception:
-                card_oid = card_id  # keep as string if not a valid ObjectId
-
-        doc = {
-            "userId": user["_id"],
-            "card_id": card_oid,
-            "product_slug": product_slug,
-            "source": source,
-            "applied_at": datetime.utcnow(),
-        }
-        app.config["MONGO_DB"]["applications"].insert_one(doc)
-        return jsonify({"ok": True}), 201
 
 
     def parse_card_ids_query() -> Optional[List[ObjectId]]:
