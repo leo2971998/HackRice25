@@ -10,6 +10,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import axios from "axios";
 
 const api = axios.create({
@@ -51,6 +58,8 @@ type MerchantRow = {
   tags?: string[];
 };
 
+type SpendBasis = "one-time" | "monthly" | "yearly";
+
 const usd = new Intl.NumberFormat(undefined, {
   style: "currency",
   currency: "USD",
@@ -65,7 +74,16 @@ export function BestCardFinder({
   accountRows: { id: string; nickname: string; issuer: string }[];
 }) {
   const [merchant, setMerchant] = useState("");
-  const [spend, setSpend] = useState<number>(150);
+  const [basis, setBasis] = useState<SpendBasis>("monthly");
+  const [spendInput, setSpendInput] = useState<string>("150");
+
+  const spendNumber = useMemo(() => {
+    const n = parseFloat(spendInput);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [spendInput]);
+
+  const basisLabelShort =
+    basis === "one-time" ? "purchase" : basis === "yearly" ? "year" : "month";
 
   const [allMerchants, setAllMerchants] = useState<MerchantRow[]>([]);
   const [loadingMerchants, setLoadingMerchants] = useState(false);
@@ -114,6 +132,16 @@ export function BestCardFinder({
       .slice(0, 6);
   }, [merchant, merchantOptions]);
 
+  function normalizeMoneyString(s: string): string {
+    let clean = s.replace(/[^\d.]/g, "");
+    const parts = clean.split(".");
+    if (parts.length > 2) clean = parts[0] + "." + parts.slice(1).join("");
+    if (clean === "" || clean === ".") return "";
+    const n = Math.max(0, parseFloat(clean));
+    if (!Number.isFinite(n)) return "";
+    return n.toFixed(2).replace(/\.00$/, "");
+  }
+
   async function onFind() {
     const name = merchant.trim();
     if (!name) {
@@ -121,8 +149,12 @@ export function BestCardFinder({
       setResult(null);
       return;
     }
-    if (!(spend > 0)) {
-      setError("Enter a valid monthly spend");
+    if (!(spendNumber > 0)) {
+      setError(
+        basis === "one-time"
+          ? "Enter a valid purchase amount"
+          : `Enter a valid ${basisLabelShort} spend`
+      );
       setResult(null);
       return;
     }
@@ -132,9 +164,16 @@ export function BestCardFinder({
     setResult(null);
 
     try {
+      const assumedMonthly =
+        basis === "monthly"
+          ? spendNumber
+          : basis === "yearly"
+          ? spendNumber / 12
+          : spendNumber;
+
       const res = await api.post("/recommendations/best-card", {
         merchant: name,
-        assumedMonthlySpend: spend,
+        assumedMonthlySpend: assumedMonthly,
         selectedCardIds,
       });
 
@@ -143,7 +182,6 @@ export function BestCardFinder({
       const alternatives = Array.isArray(data.alternatives)
         ? data.alternatives
         : [];
-
       const bestOwnedPct: number =
         typeof bestOwned?.percentBack === "number" ? bestOwned.percentBack : 0;
 
@@ -157,7 +195,7 @@ export function BestCardFinder({
               issuer: bestOwned.issuer,
               rewardRateText: bestOwned.rewardRateText,
               percentBack: bestOwnedPct,
-              estEarningsMonthly: spend * bestOwnedPct,
+              estEarningsMonthly: assumedMonthly * bestOwnedPct,
             }
           : {
               id: "none",
@@ -168,21 +206,14 @@ export function BestCardFinder({
               estEarningsMonthly: 0,
             },
         youHaveThisCard: Boolean(bestOwned),
-        alternatives: alternatives.map((a: any) => {
-          const altPct: number | undefined =
-            typeof a.percentBack === "number" ? a.percentBack : undefined;
-          const extra =
-            altPct !== undefined
-              ? Math.max(0, (altPct - bestOwnedPct) * spend)
-              : undefined;
-          return {
-            id: a.id,
-            name: `${a.issuer ?? ""} ${a.name ?? ""}`.trim(),
-            rewardRateText: a.rewardRateText,
-            percentBack: altPct,
-            estSavingsMonthly: extra,
-          };
-        }),
+        alternatives: alternatives.map((a: any) => ({
+          id: a.id,
+          name: `${a.issuer ?? ""} ${a.name ?? ""}`.trim(),
+          rewardRateText: a.rewardRateText,
+          percentBack:
+            typeof a.percentBack === "number" ? a.percentBack : undefined,
+          estSavingsMonthly: undefined,
+        })),
       };
 
       setResult(mapped);
@@ -207,6 +238,22 @@ export function BestCardFinder({
     return `This is your best card for ${result.merchant}.`;
   }, [result]);
 
+  const bestEarningsAmount = useMemo(() => {
+    if (!result) return 0;
+    const pct = result.bestCard.percentBack ?? 0;
+    return Math.max(0, pct * (spendNumber || 0));
+  }, [result, spendNumber]);
+
+  const altSavings = useMemo(() => {
+    if (!result?.alternatives?.length) return [];
+    const ownedPct = result.bestCard.percentBack ?? 0;
+    return result.alternatives.map((alt) => {
+      const altPct = alt.percentBack ?? 0;
+      const extra = Math.max(0, (altPct - ownedPct) * (spendNumber || 0));
+      return { ...alt, estSavingsAmount: extra };
+    });
+  }, [result, spendNumber]);
+
   return (
     <Card className="rounded-3xl">
       <CardHeader>
@@ -214,16 +261,19 @@ export function BestCardFinder({
           Best card for a merchant
         </CardTitle>
         <CardDescription>
-          Type a store and we will suggest the best card from your linked cards.
+          Type a store and pick your spend basis.
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-6">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
-          <div className="sm:col-span-7 space-y-2">
+      <CardContent className="space-y-4">
+        {/* Row: all controls align bottom */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-12 items-end">
+          {/* Merchant */}
+          <div className="sm:col-span-6 space-y-2 min-w-0">
             <Label htmlFor="merchant">Merchant</Label>
             <Input
               id="merchant"
+              className="h-11"
               placeholder={
                 loadingMerchants
                   ? "Loading merchants…"
@@ -236,42 +286,53 @@ export function BestCardFinder({
             {loadError && (
               <div className="text-xs text-destructive pt-1">{loadError}</div>
             )}
-
-            {filteredSuggestions.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-1">
-                {filteredSuggestions.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className="rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-xs hover:bg-muted/60"
-                    onClick={() => setMerchant(m)}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
-          <div className="sm:col-span-3 space-y-2">
-            <Label htmlFor="spend">Monthly spend estimate</Label>
+          {/* Spend basis dropdown */}
+          <div className="sm:col-span-2 space-y-2">
+            <Label htmlFor="basis">Basis</Label>
+            <Select
+              value={basis}
+              onValueChange={(v: SpendBasis) => setBasis(v)}
+            >
+              <SelectTrigger id="basis" className="h-11 w-full">
+                <SelectValue placeholder="Choose basis" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="one-time">One-time</SelectItem>
+                <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="yearly">Yearly</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Amount input */}
+          <div className="sm:col-span-2 space-y-2">
+            <Label htmlFor="spend">Amount</Label>
             <Input
               id="spend"
-              type="number"
-              min={0}
-              step="1"
-              value={Number.isFinite(spend) ? spend : 0}
-              onChange={(e) => setSpend(Number(e.target.value))}
-              placeholder="150"
+              className="h-11"
+              inputMode="decimal"
+              pattern="[0-9]*[.]?[0-9]*"
+              value={spendInput}
+              onChange={(e) => setSpendInput(e.target.value)}
+              onBlur={(e) =>
+                setSpendInput(normalizeMoneyString(e.target.value))
+              }
+              placeholder={
+                basis === "one-time"
+                  ? "50"
+                  : basis === "yearly"
+                  ? "1800"
+                  : "150"
+              }
             />
-            <p className="text-[11px] text-muted-foreground">
-              Used for earnings and savings math
-            </p>
           </div>
 
-          <div className="sm:col-span-2 flex items-end">
+          {/* CTA */}
+          <div className="sm:col-span-2">
             <Button
-              className="w-full"
+              className="h-11 w-full whitespace-nowrap"
               onClick={onFind}
               disabled={isLoading || loadingMerchants}
             >
@@ -279,6 +340,22 @@ export function BestCardFinder({
             </Button>
           </div>
         </div>
+
+        {/* Suggestions row lives BELOW the controls so it doesn't affect alignment */}
+        {filteredSuggestions.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {filteredSuggestions.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className="rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-xs hover:bg-muted/60"
+                onClick={() => setMerchant(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        )}
 
         {error && (
           <div className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -288,14 +365,14 @@ export function BestCardFinder({
 
         {!error && !isLoading && !result && (
           <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
-            Start typing a merchant. We will use your seeded list for
-            suggestions.
+            Start typing a merchant. You can choose one-time, monthly, or
+            yearly.
           </div>
         )}
 
         {result && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
-            {/* Left: earnings */}
+            {/* Left */}
             <Card className="md:col-span-7 rounded-2xl">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
@@ -330,11 +407,12 @@ export function BestCardFinder({
                 </div>
 
                 <p className="text-sm text-muted-foreground">
-                  Estimated monthly earnings:{" "}
+                  Estimated earnings{" "}
+                  {basis === "one-time"
+                    ? "for this purchase"
+                    : `per ${basisLabelShort}`}{" "}
                   <span className="font-semibold text-foreground">
-                    {usd.format(
-                      Math.max(0, result.bestCard.estEarningsMonthly ?? 0)
-                    )}
+                    {usd.format(bestEarningsAmount)}
                   </span>
                 </p>
 
@@ -342,38 +420,36 @@ export function BestCardFinder({
               </CardContent>
             </Card>
 
-            {/* Right: savings */}
+            {/* Right */}
             <Card className="md:col-span-5 rounded-2xl">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
                   Ways to save more
                 </CardTitle>
                 <CardDescription>
-                  Cards that could save you more per month
+                  Cards that could save you more per {basisLabelShort}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {result.alternatives?.length ? (
-                  <>
-                    {result.alternatives.slice(0, 3).map((alt) => (
-                      <div
-                        key={alt.id}
-                        className="rounded-2xl bg-muted/40 px-4 py-3"
-                      >
-                        <p className="font-medium text-foreground">
-                          {alt.name}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {alt.rewardRateText}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          You could save about{" "}
-                          {usd.format(Math.max(0, alt.estSavingsMonthly ?? 0))}{" "}
-                          more per month.
-                        </p>
-                      </div>
-                    ))}
-                  </>
+                {altSavings.length ? (
+                  altSavings.slice(0, 3).map((alt) => (
+                    <div
+                      key={alt.id}
+                      className="rounded-2xl bg-muted/40 px-4 py-3"
+                    >
+                      <p className="font-medium text-foreground">{alt.name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {alt.rewardRateText}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        You could save about{" "}
+                        {usd.format(
+                          Math.max(0, (alt as any).estSavingsAmount ?? 0)
+                        )}{" "}
+                        more per {basisLabelShort}.
+                      </p>
+                    </div>
+                  ))
                 ) : (
                   <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-3 text-sm text-muted-foreground">
                     No stronger alternatives right now.
