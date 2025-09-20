@@ -1,24 +1,20 @@
 import { NavLink } from "react-router-dom"
-import { LogOut, ShieldCheck } from "lucide-react"
+import { LogOut } from "lucide-react"
 import { useAuth0 } from "@auth0/auth0-react"
 
 import { NAV_LINKS } from "@/routes/links"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { ThemeToggle } from "./ThemeToggle"
-import { useMe, useStatus } from "@/hooks/useApi"
+import { useMe } from "@/hooks/useApi"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth0()
   const { data: me } = useMe()
-  const { data: status } = useStatus()
 
   const displayName = me?.name?.trim() || user?.name || (me?.email ? me.email.split("@")[0] : "Swipe Coach member")
   const displayEmail = me?.email ?? user?.email
   const avatarUrl = user?.picture
-  const verified = status?.emailVerified
-
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-primary/5 via-background to-background">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
@@ -74,11 +70,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <p className="text-sm font-medium text-muted-foreground">Signed in as</p>
               <p className="text-xl font-semibold text-foreground">{displayName}</p>
               {displayEmail ? <p className="text-sm text-muted-foreground">{displayEmail}</p> : null}
-              {verified ? (
-                <Badge variant="success" className="mt-2 w-fit gap-1">
-                  <ShieldCheck className="h-4 w-4" /> Email verified
-                </Badge>
-              ) : null}
             </div>
             {avatarUrl ? (
               <img src={avatarUrl} alt={displayName} className="h-14 w-14 rounded-full border border-border/60 object-cover" />

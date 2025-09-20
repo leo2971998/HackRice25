@@ -341,15 +341,12 @@ def create_app() -> Flask:
                 "email": user.get("email"),
                 "name": user.get("name"),
                 "preferences": user.get("preferences", DEFAULT_PREFERENCES),
-                "emailVerified": bool(user.get("email_verified")),
             }
         )
 
     @api_bp.patch("/me")
     def update_me():
         user = g.current_user
-        if not user.get("email_verified"):
-            return jsonify({"code": "email_not_verified", "message": "Verify your email to update your profile."}), 403
 
         payload = request.get_json(silent=True) or {}
         updates: Dict[str, Any] = {}
@@ -369,7 +366,6 @@ def create_app() -> Flask:
                     "email": user.get("email"),
                     "name": user.get("name"),
                     "preferences": user.get("preferences", DEFAULT_PREFERENCES),
-                    "emailVerified": bool(user.get("email_verified")),
                 }
             )
 
@@ -382,7 +378,6 @@ def create_app() -> Flask:
                 "email": user.get("email"),
                 "name": user.get("name"),
                 "preferences": user.get("preferences", DEFAULT_PREFERENCES),
-                "emailVerified": bool(user.get("email_verified")),
             }
         )
 
@@ -391,7 +386,7 @@ def create_app() -> Flask:
         user = g.current_user
         accounts = database["accounts"]
         has_account = accounts.count_documents({"userId": user["_id"], "account_type": "credit_card"}) > 0
-        return jsonify({"emailVerified": bool(user.get("email_verified")), "hasAccount": has_account})
+        return jsonify({"hasAccount": has_account})
 
     @api_bp.post("/auth/resend-verification")
     def resend_verification():
@@ -478,8 +473,6 @@ def create_app() -> Flask:
     @api_bp.post("/cards")
     def add_card():
         user = g.current_user
-        if not user.get("email_verified"):
-            return jsonify({"code": "email_not_verified", "message": "Verify your email to add a card."}), 403
         payload = request.get_json(silent=True) or {}
         required_fields = ["nickname", "issuer", "network", "mask", "expiry_month", "expiry_year"]
         mapped_payload = {
@@ -569,8 +562,6 @@ def create_app() -> Flask:
     @api_bp.patch("/cards/<card_id>")
     def update_card(card_id: str):
         user = g.current_user
-        if not user.get("email_verified"):
-            return jsonify({"code": "email_not_verified", "message": "Verify your email to update a card."}), 403
         card = get_card_or_404(card_id, user)
         payload = request.get_json(silent=True) or {}
         updates: Dict[str, Any] = {}
@@ -592,8 +583,6 @@ def create_app() -> Flask:
     @api_bp.delete("/cards/<card_id>")
     def delete_card(card_id: str):
         user = g.current_user
-        if not user.get("email_verified"):
-            return jsonify({"code": "email_not_verified", "message": "Verify your email to remove a card."}), 403
         card = get_card_or_404(card_id, user)
         database["accounts"].delete_one({"_id": card["_id"]})
         return ("", 204)

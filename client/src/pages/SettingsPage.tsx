@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useAccounts, useMe, useResendVerification, useStatus, useUpdateMe } from "@/hooks/useApi"
+import { useAccounts, useMe, useUpdateMe } from "@/hooks/useApi"
 import { useDeleteCard } from "@/hooks/useCards"
 import { useToast } from "@/components/ui/use-toast"
 import type { Preferences } from "@/types/api"
@@ -32,7 +32,6 @@ const CURRENCIES = [
 export function SettingsPage() {
   const { toast } = useToast()
   const meQuery = useMe()
-  const statusQuery = useStatus()
   const accountsQuery = useAccounts()
   const deleteCard = useDeleteCard({
     onSuccess: () => {
@@ -48,21 +47,6 @@ export function SettingsPage() {
       })
     },
   })
-  const resendVerification = useResendVerification({
-    onSuccess: () => {
-      toast({
-        title: "Verification email sent",
-        description: "Check your inbox for a fresh link.",
-      })
-    },
-    onError: (error) => {
-      toast({
-        title: "Unable to send email",
-        description: error.message,
-      })
-    },
-  })
-
   const updateMe = useUpdateMe({
     onSuccess: () => {
       toast({
@@ -79,8 +63,6 @@ export function SettingsPage() {
   })
 
   const me = meQuery.data
-  const status = statusQuery.data
-  const verified = status?.emailVerified
   const accounts = accountsQuery.data ?? []
 
   const [name, setName] = useState("")
@@ -127,16 +109,6 @@ export function SettingsPage() {
               <Label>Email</Label>
               <Input value={me?.email ?? ""} disabled readOnly />
             </div>
-          </div>
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <span className={verified ? "text-emerald-600" : "text-amber-600"}>
-              {verified ? "Email verified" : "Email not yet verified"}
-            </span>
-            {!verified ? (
-              <Button type="button" size="sm" variant="outline" onClick={() => resendVerification.mutate()}>
-                Resend verification
-              </Button>
-            ) : null}
           </div>
         </CardContent>
       </Card>
