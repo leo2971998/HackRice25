@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from bson import ObjectId
 from flask import Blueprint, Flask, jsonify, request, g
@@ -12,6 +12,10 @@ from pymongo.collection import Collection
 from pymongo.errors import DuplicateKeyError
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
+
+from llm.gemini import explain_recommendations
+from services.scoring import score_catalog
+from services.spend import aggregate_spend_details, build_category_rules, compute_user_mix, load_transactions
 
 try:
     from dotenv import load_dotenv
@@ -132,6 +136,7 @@ def ensure_indexes(database) -> None:
 
     credit_cards = database["credit_cards"]
     credit_cards.create_index([("issuer", ASCENDING), ("network", ASCENDING)])
+    credit_cards.create_index([("slug", ASCENDING)], unique=True, name="slug_1")
 
 
 def merge_preferences(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -338,6 +343,129 @@ def create_app() -> Flask:
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
+    def parse_card_ids_query() -> Optional[List[ObjectId]]:
+        card_ids = request.args.getlist("cardIds")
+        if not card_ids:
+            return None
+        object_ids: List[ObjectId] = []
+        for card_id in card_ids:
+            try:
+                object_ids.append(validate_object_id(card_id))
+            except Exception:
+                continue
+        return object_ids or None
+
+    def format_catalog_product(doc: Dict[str, Any]) -> Dict[str, Any]:
+        rewards = [
+            {
+                "category": reward.get("category"),
+                "rate": float(reward.get("rate", 0.0) or 0.0),
+                "cap_monthly": float(reward["cap_monthly"]) if reward.get("cap_monthly") is not None else None,
+            }
+            for reward in doc.get("rewards", [])
+            if reward.get("category")
+        ]
+
+        welcome_offer = doc.get("welcome_offer") or {}
+        formatted_welcome = None
+        if welcome_offer:
+            formatted_welcome = {}
+            if welcome_offer.get("bonus_value_usd") is not None:
+                formatted_welcome["bonus_value_usd"] = float(welcome_offer.get("bonus_value_usd", 0.0) or 0.0)
+            if welcome_offer.get("min_spend") is not None:
+                formatted_welcome["min_spend"] = float(welcome_offer.get("min_spend", 0.0) or 0.0)
+            if welcome_offer.get("window_days") is not None:
+                formatted_welcome["window_days"] = int(welcome_offer.get("window_days") or 0)
+            if not formatted_welcome:
+                formatted_welcome = None
+
+        last_updated = doc.get("last_updated")
+        if isinstance(last_updated, datetime):
+            last_updated_value = last_updated.isoformat().replace("+00:00", "Z")
+        else:
+            last_updated_value = last_updated
+
+        return {
+            "id": str(doc.get("_id")) if doc.get("_id") else None,
+            "slug": doc.get("slug"),
+            "product_name": doc.get("product_name"),
+            "issuer": doc.get("issuer"),
+            "network": doc.get("network"),
+            "annual_fee": float(doc.get("annual_fee", 0.0) or 0.0),
+            "base_cashback": float(doc.get("base_cashback", 0.0) or 0.0),
+            "rewards": rewards,
+            "welcome_offer": formatted_welcome,
+            "foreign_tx_fee": float(doc.get("foreign_tx_fee", 0.0) or 0.0),
+            "link_url": doc.get("link_url"),
+            "active": bool(doc.get("active", True)),
+            "last_updated": last_updated_value,
+        }
+
+    def prepare_catalog_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+        required_fields = ["slug", "product_name", "issuer"]
+        for field in required_fields:
+            value = data.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise BadRequest(f"{field} is required")
+
+        link_url = data.get("link_url")
+        if isinstance(link_url, str):
+            link_url = link_url.strip() or None
+        elif link_url is not None:
+            link_url = str(link_url)
+
+        payload: Dict[str, Any] = {
+            "slug": data["slug"].strip(),
+            "product_name": data["product_name"].strip(),
+            "issuer": data["issuer"].strip(),
+            "network": (data.get("network") or "").strip() or None,
+            "annual_fee": float(data.get("annual_fee", 0.0) or 0.0),
+            "base_cashback": float(data.get("base_cashback", 0.0) or 0.0),
+            "foreign_tx_fee": float(data.get("foreign_tx_fee", 0.0) or 0.0),
+            "link_url": link_url,
+            "active": bool(data.get("active", True)),
+        }
+
+        rewards_payload = []
+        for reward in data.get("rewards", []) or []:
+            category = reward.get("category")
+            rate = reward.get("rate")
+            if not category or rate is None:
+                continue
+            reward_entry: Dict[str, Any] = {
+                "category": str(category),
+                "rate": float(rate),
+            }
+            if reward.get("cap_monthly") is not None:
+                try:
+                    reward_entry["cap_monthly"] = float(reward["cap_monthly"])
+                except (TypeError, ValueError):
+                    pass
+            rewards_payload.append(reward_entry)
+        payload["rewards"] = rewards_payload
+
+        welcome = data.get("welcome_offer") or {}
+        welcome_payload: Dict[str, Any] = {}
+        if welcome.get("bonus_value_usd") is not None:
+            try:
+                welcome_payload["bonus_value_usd"] = float(welcome["bonus_value_usd"])
+            except (TypeError, ValueError):
+                pass
+        if welcome.get("min_spend") is not None:
+            try:
+                welcome_payload["min_spend"] = float(welcome["min_spend"])
+            except (TypeError, ValueError):
+                pass
+        if welcome.get("window_days") is not None:
+            try:
+                welcome_payload["window_days"] = int(welcome["window_days"])
+            except (TypeError, ValueError):
+                pass
+        if welcome_payload:
+            payload["welcome_offer"] = welcome_payload
+
+        return payload
+
     @api_bp.before_request
     def authenticate_request() -> None:
         # ✅ Always let CORS preflight through
@@ -425,30 +553,25 @@ def create_app() -> Flask:
     def spend_summary():
         user = g.current_user
         window_days = parse_window_days(30)
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        
-        # Get card IDs from query parameters for filtering
-        card_ids = request.args.getlist('cardIds')
-        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
-        
-        if card_ids:
-            # Convert string IDs to ObjectIds and add to filter
-            try:
-                object_ids = [validate_object_id(card_id) for card_id in card_ids]
-                transaction_filter["accountId"] = {"$in": object_ids}
-            except:
-                pass  # If invalid IDs, ignore filtering
-        
-        transactions = list(database["transactions"].find(transaction_filter))
-        total, count, by_category = calculate_summary(transactions)
-        accounts_count = database["accounts"].count_documents({"userId": user["_id"], "account_type": "credit_card"})
+        card_object_ids = parse_card_ids_query()
+
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+        summary = aggregate_spend_details(transactions)
+
+        accounts_count = database["accounts"].count_documents(
+            {"userId": user["_id"], "account_type": "credit_card"}
+        )
         categories = [
-            {"name": name, "total": round(value, 2)}
-            for name, value in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
+            {"name": row["key"], "total": row["amount"]}
+            for row in summary["categories"]
         ]
         return jsonify(
             {
-                "stats": {"totalSpend": round(total, 2), "txns": count, "accounts": accounts_count},
+                "stats": {
+                    "totalSpend": summary["total"],
+                    "txns": summary["transaction_count"],
+                    "accounts": accounts_count,
+                },
                 "byCategory": categories,
             }
         )
@@ -458,72 +581,235 @@ def create_app() -> Flask:
         user = g.current_user
         window_days = parse_window_days(30)
         limit_raw = request.args.get("limit", 8)
-        card_ids = request.args.getlist('cardIds')
-        
+
         try:
             limit = int(limit_raw)
         except (TypeError, ValueError):
             raise BadRequest("limit must be an integer")
         if limit <= 0:
             raise BadRequest("limit must be positive")
-            
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
-        
-        if card_ids:
-            # Convert string IDs to ObjectIds and add to filter
-            try:
-                object_ids = [validate_object_id(card_id) for card_id in card_ids]
-                transaction_filter["accountId"] = {"$in": object_ids}
-            except:
-                pass  # If invalid IDs, ignore filtering
-                
-        txns = list(database["transactions"].find(transaction_filter))
-        merchants_map: Dict[str, Dict[str, Any]] = {}
-        for txn in txns:
-            name = txn.get("merchant_id") or txn.get("description_clean") or txn.get("description") or "Merchant"
-            category = txn.get("category") or "General"
-            entry = merchants_map.setdefault(
-                name,
-                {"id": name, "name": name, "category": category, "count": 0, "total": 0.0, "logoUrl": txn.get("logoUrl", "")},
-            )
-            entry["count"] += 1
-            entry["total"] += float(txn.get("amount", 0))
-        ordered = sorted(merchants_map.values(), key=lambda item: item["total"], reverse=True)
+
+        card_object_ids = parse_card_ids_query()
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+        rules = build_category_rules(database["merchant_categories"].find({}))
+        breakdown = aggregate_spend_details(transactions, rules)
+        ordered = breakdown["merchants"]
         return jsonify(
             [
                 {
-                    "id": m["id"],
-                    "name": m["name"],
-                    "category": m["category"],
-                    "count": m["count"],
-                    "total": round(m["total"], 2),
-                    "logoUrl": m.get("logoUrl", ""),
+                    "id": merchant["name"],
+                    "name": merchant["name"],
+                    "category": merchant["category"],
+                    "count": merchant["count"],
+                    "total": merchant["amount"],
+                    "logoUrl": merchant.get("logoUrl", ""),
                 }
-                for m in ordered[:limit]
+                for merchant in ordered[:limit]
             ]
+        )
+
+    @api_bp.get("/spend/details")
+    def spend_details():
+        user = g.current_user
+        window_days = parse_window_days(30)
+        card_object_ids = parse_card_ids_query()
+
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+        rules = build_category_rules(database["merchant_categories"].find({}))
+        breakdown = aggregate_spend_details(transactions, rules)
+
+        return jsonify(
+            {
+                "windowDays": window_days,
+                "total": breakdown["total"],
+                "transactionCount": breakdown["transaction_count"],
+                "categories": breakdown["categories"],
+                "merchants": [
+                    {
+                        "name": merchant["name"],
+                        "category": merchant["category"],
+                        "amount": merchant["amount"],
+                        "count": merchant["count"],
+                        "logoUrl": merchant.get("logoUrl", ""),
+                    }
+                    for merchant in breakdown["merchants"]
+                ],
+            }
         )
 
     @api_bp.get("/money-moments")
     def money_moments():
         user = g.current_user
         window_days = parse_window_days(30)
-        card_ids = request.args.getlist('cardIds')
-        
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
-        
-        if card_ids:
-            # Convert string IDs to ObjectIds and add to filter
-            try:
-                object_ids = [validate_object_id(card_id) for card_id in card_ids]
-                transaction_filter["accountId"] = {"$in": object_ids}
-            except:
-                pass  # If invalid IDs, ignore filtering
-                
-        txns = list(database["transactions"].find(transaction_filter))
+        card_object_ids = parse_card_ids_query()
+
+        txns = load_transactions(database, user["_id"], window_days, card_object_ids)
         moments = list(calculate_money_moments(window_days, txns))
         return jsonify(moments)
+
+    @api_bp.get("/cards/catalog")
+    def list_catalog_cards():
+        active_param = request.args.get("active")
+        query: Dict[str, Any] = {}
+        if active_param is not None:
+            active_value = str(active_param).lower() in ("1", "true", "yes")
+            query["active"] = active_value
+
+        cards_cursor = database["credit_cards"].find(query).sort("product_name", ASCENDING)
+        return jsonify([format_catalog_product(card) for card in cards_cursor])
+
+    @api_bp.post("/cards/catalog")
+    def create_catalog_cards():
+        payload = request.get_json(force=True)
+        collection = database["credit_cards"]
+        now = datetime.utcnow()
+
+        if isinstance(payload, list):
+            documents = [prepare_catalog_payload(item) for item in payload if isinstance(item, dict)]
+            if not documents:
+                raise BadRequest("payload must contain at least one catalog entry")
+            for document in documents:
+                document.setdefault("active", True)
+                document["last_updated"] = now
+            try:
+                result = collection.insert_many(documents)
+            except DuplicateKeyError as exc:
+                raise BadRequest("duplicate catalog slug") from exc
+            inserted = list(collection.find({"_id": {"$in": result.inserted_ids}}))
+            return jsonify([format_catalog_product(doc) for doc in inserted]), 201
+
+        if not isinstance(payload, dict):
+            raise BadRequest("Invalid payload")
+
+        document = prepare_catalog_payload(payload)
+        document.setdefault("active", True)
+        document["last_updated"] = now
+        try:
+            result = collection.insert_one(document)
+        except DuplicateKeyError as exc:
+            raise BadRequest("duplicate catalog slug") from exc
+        created = collection.find_one({"_id": result.inserted_id})
+        if created is None:
+            raise BadRequest("Unable to create catalog entry")
+        return jsonify(format_catalog_product(created)), 201
+
+    @api_bp.post("/recommendations")
+    def recommendations():
+        user = g.current_user
+        payload = request.get_json(silent=True) or {}
+
+        try:
+            window_days = int(payload.get("window") or 90)
+        except (TypeError, ValueError):
+            raise BadRequest("window must be an integer")
+        if window_days <= 0:
+            raise BadRequest("window must be positive")
+
+        try:
+            limit = int(payload.get("limit", 5))
+        except (TypeError, ValueError):
+            raise BadRequest("limit must be an integer")
+
+        include_explain = bool(payload.get("include_explain", True))
+
+        monthly_spend_value = None
+        if payload.get("monthly_spend") is not None:
+            try:
+                monthly_spend_value = float(payload.get("monthly_spend"))
+            except (TypeError, ValueError):
+                raise BadRequest("monthly_spend must be a number")
+
+        raw_card_ids = payload.get("card_ids") or payload.get("cardIds") or []
+        card_object_ids: Optional[List[ObjectId]] = None
+        if isinstance(raw_card_ids, list):
+            parsed_ids: List[ObjectId] = []
+            for value in raw_card_ids:
+                try:
+                    parsed_ids.append(validate_object_id(value))
+                except Exception:
+                    continue
+            if parsed_ids:
+                card_object_ids = parsed_ids
+
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+        breakdown = aggregate_spend_details(transactions)
+        total_window_spend = breakdown["total"]
+
+        raw_mix = payload.get("category_mix")
+        normalized_mix: Dict[str, float] = {}
+        if isinstance(raw_mix, dict):
+            sanitized: Dict[str, float] = {}
+            for key, value in raw_mix.items():
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if numeric <= 0:
+                    continue
+                sanitized[str(key)] = numeric
+            mix_total = sum(sanitized.values())
+            if mix_total > 0:
+                normalized_mix = {key: val / mix_total for key, val in sanitized.items()}
+
+        if not normalized_mix:
+            normalized_mix, total_window_spend, transactions = compute_user_mix(
+                database,
+                user["_id"],
+                window_days,
+                card_object_ids,
+                transactions=transactions,
+            )
+
+        if monthly_spend_value is not None:
+            monthly_total = max(monthly_spend_value, 0.0)
+        else:
+            if total_window_spend > 0 and window_days > 0:
+                monthly_total = (total_window_spend / window_days) * 30
+            elif normalized_mix:
+                monthly_total = 1000.0
+            else:
+                monthly_total = 0.0
+
+        if not normalized_mix or monthly_total <= 0:
+            return jsonify(
+                {
+                    "mix": normalized_mix,
+                    "monthly_spend": round(monthly_total, 2),
+                    "windowDays": window_days,
+                    "cards": [],
+                    "explanation": "",
+                }
+            )
+
+        catalog_cards = list(database["credit_cards"].find({"active": True}))
+        if not catalog_cards:
+            return jsonify(
+                {
+                    "mix": normalized_mix,
+                    "monthly_spend": round(monthly_total, 2),
+                    "windowDays": window_days,
+                    "cards": [],
+                    "explanation": "",
+                }
+            )
+
+        scored_cards = score_catalog(catalog_cards, normalized_mix, monthly_total, window_days, limit=limit)
+
+        explanation = ""
+        if include_explain and scored_cards:
+            top_names = [card.get("product_name") for card in scored_cards[:3] if card.get("product_name")]
+            if top_names:
+                explanation = explain_recommendations(normalized_mix, top_names)
+
+        return jsonify(
+            {
+                "mix": normalized_mix,
+                "monthly_spend": round(monthly_total, 2),
+                "windowDays": window_days,
+                "cards": scored_cards,
+                "explanation": explanation,
+            }
+        )
 
     @api_bp.get("/cards")
     def list_cards():

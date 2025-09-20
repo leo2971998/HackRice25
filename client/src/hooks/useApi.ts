@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type UseQueryOptions } from "@tanstack/react-query"
 
 import { apiFetch } from "@/lib/api-client"
-import type { CardRow, Me, MerchantRow, MoneyMoment, Preferences, SpendSummary } from "@/types/api"
+import type {
+  CardRow,
+  Me,
+  MerchantRow,
+  MoneyMoment,
+  Preferences,
+  SpendDetails,
+  SpendSummary,
+} from "@/types/api"
 
 const DEFAULT_STALE_TIME = 60_000
 
@@ -19,7 +27,7 @@ export function useMe(options?: QueryOpts<Me>) {
 }
 
 export function useSpendSummary(
-  windowDays: number, 
+  windowDays: number,
   options?: QueryOpts<SpendSummary> & { cardIds?: string[] }
 ) {
   const { cardIds, ...queryOptions } = options || {}
@@ -32,6 +40,24 @@ export function useSpendSummary(
   return useQuery({
     queryKey: ["spend-summary", { windowDays, cardIds }],
     queryFn: () => apiFetch<SpendSummary>(`/spend/summary?${query.toString()}`),
+    ...queryOptions,
+  })
+}
+
+export function useSpendDetails(
+  windowDays: number,
+  options?: QueryOpts<SpendDetails> & { cardIds?: string[] }
+) {
+  const { cardIds, ...queryOptions } = options || {}
+  const query = new URLSearchParams({ window: String(windowDays) })
+
+  if (cardIds && cardIds.length > 0) {
+    cardIds.forEach((id) => query.append("cardIds", id))
+  }
+
+  return useQuery({
+    queryKey: ["spend-details", { windowDays, cardIds }],
+    queryFn: () => apiFetch<SpendDetails>(`/spend/details?${query.toString()}`),
     ...queryOptions,
   })
 }
