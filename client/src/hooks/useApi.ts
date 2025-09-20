@@ -18,31 +18,59 @@ export function useMe(options?: QueryOpts<Me>) {
   })
 }
 
-export function useSpendSummary(windowDays: number, options?: QueryOpts<SpendSummary>) {
+export function useSpendSummary(
+  windowDays: number, 
+  options?: QueryOpts<SpendSummary> & { cardIds?: string[] }
+) {
+  const { cardIds, ...queryOptions } = options || {}
+  const query = new URLSearchParams({ window: String(windowDays) })
+  
+  if (cardIds && cardIds.length > 0) {
+    cardIds.forEach(id => query.append('cardIds', id))
+  }
+  
   return useQuery({
-    queryKey: ["spend-summary", { windowDays }],
-    queryFn: () => apiFetch<SpendSummary>(`/spend/summary?window=${windowDays}`),
-    ...options,
+    queryKey: ["spend-summary", { windowDays, cardIds }],
+    queryFn: () => apiFetch<SpendSummary>(`/spend/summary?${query.toString()}`),
+    ...queryOptions,
   })
 }
 
 export function useMerchants(
-  params: { limit: number; windowDays: number },
+  params: { limit: number; windowDays: number; cardIds?: string[] },
   options?: QueryOpts<MerchantRow[]>
 ) {
-  const query = new URLSearchParams({ limit: String(params.limit), window: String(params.windowDays) })
+  const query = new URLSearchParams({ 
+    limit: String(params.limit), 
+    window: String(params.windowDays) 
+  })
+  
+  if (params.cardIds && params.cardIds.length > 0) {
+    params.cardIds.forEach(id => query.append('cardIds', id))
+  }
+  
   return useQuery({
-    queryKey: ["merchants", { limit: params.limit, windowDays: params.windowDays }],
+    queryKey: ["merchants", { limit: params.limit, windowDays: params.windowDays, cardIds: params.cardIds }],
     queryFn: () => apiFetch<MerchantRow[]>(`/merchants?${query.toString()}`),
     ...options,
   })
 }
 
-export function useMoneyMoments(windowDays: number, options?: QueryOpts<MoneyMoment[]>) {
+export function useMoneyMoments(
+  windowDays: number, 
+  options?: QueryOpts<MoneyMoment[]> & { cardIds?: string[] }
+) {
+  const { cardIds, ...queryOptions } = options || {}
+  const query = new URLSearchParams({ window: String(windowDays) })
+  
+  if (cardIds && cardIds.length > 0) {
+    cardIds.forEach(id => query.append('cardIds', id))
+  }
+  
   return useQuery({
-    queryKey: ["money-moments", { windowDays }],
-    queryFn: () => apiFetch<MoneyMoment[]>(`/money-moments?window=${windowDays}`),
-    ...options,
+    queryKey: ["money-moments", { windowDays, cardIds }],
+    queryFn: () => apiFetch<MoneyMoment[]>(`/money-moments?${query.toString()}`),
+    ...queryOptions,
   })
 }
 
