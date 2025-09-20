@@ -5,3 +5,6 @@ dist
 *.log
 /.idea
 .env
+**/.env
+**/.env.*
+!.env.example
