@@ -14,9 +14,8 @@ import { AddCardDialog } from "@/components/cards/AddCardDialog"
 import { EditCardDialog } from "@/components/cards/EditCardDialog"
 
 import { useToast } from "@/components/ui/use-toast"
-import { apiFetch } from "@/lib/api-client"
 
-import { useCards, useCard, useDeleteCard, useCardCatalog } from "@/hooks/useCards"
+import { useCards, useCard, useDeleteCard, useCardCatalog, useApplyForCard } from "@/hooks/useCards"
 import type { CardRow as CardRowType, CreditCardProduct } from "@/types/api"
 
 const currency0 = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 })
@@ -103,6 +102,29 @@ export default function CardsPage() {
     const [annualFeeFilter, setAnnualFeeFilter] = useState<AnnualFeeFilter>("all")
 
     const [appliedSlugs, setAppliedSlugs] = useState<Set<string>>(new Set())
+    const [pendingSlug, setPendingSlug] = useState<string | null>(null)
+
+    const applyForCard = useApplyForCard({
+        onSuccess: (_data, variables) => {
+            const normalizedSlug = variables.slug.trim()
+            setAppliedSlugs((prev) => {
+                const next = new Set(prev)
+                next.add(normalizedSlug)
+                return next
+            })
+            toast({
+                title: "Application started",
+                description: `${variables.product_name} by ${variables.issuer}`,
+            })
+        },
+        onError: (error) => {
+            toast({
+                title: "Couldn’t start application",
+                description: error.message,
+            })
+        },
+        onSettled: () => setPendingSlug(null),
+    })
 
     const filteredCatalog = useMemo(() => {
         return catalogCards.filter((card) => {
@@ -127,19 +149,21 @@ export default function CardsPage() {
 
     const [activeTab, setActiveTab] = useState<CardsTab>("linked")
 
-    const onApply = async (product: CreditCardProduct) => {
-        try {
-            await apiFetch("/applications", {
-                method: "POST",
-                body: { slug: product.slug, product_name: product.product_name, issuer: product.issuer },
-            })
-            const next = new Set(appliedSlugs)
-            if (product.slug) next.add(product.slug)
-            setAppliedSlugs(next)
-            toast({ title: "Application started", description: `${product.product_name} by ${product.issuer}` })
-        } catch (e: any) {
-            toast({ title: "Couldn’t start application", description: e?.message ?? "Unknown error" })
+    const onApply = (product: CreditCardProduct) => {
+        if (!product.slug) {
+            toast({ title: "Missing product slug", description: "Unable to start this application." })
+            return
         }
+        if (applyForCard.isPending) {
+            return
+        }
+        const slugValue = product.slug.trim()
+        setPendingSlug(slugValue)
+        applyForCard.mutate({
+            slug: slugValue,
+            product_name: product.product_name,
+            issuer: product.issuer,
+        })
     }
 
     return (
@@ -356,6 +380,7 @@ export default function CardsPage() {
                                             product={product}
                                             applied={applied}
                                             onApply={() => onApply(product)}
+                                            isPending={pendingSlug === (product.slug ?? "").trim() && applyForCard.isPending}
                                         />
                                     )
                                 })}
@@ -418,13 +443,6 @@ function formatAnnualFee(fee: number | null | undefined) {
     if (fee === 0) return "$0"
     return currency0.format(fee)
 }
-function formatForeignFee(value: number | null | undefined) {
-    if (value == null) return "None"
-    if (value <= 0) return "None"
-    if (value > 0 && value <= 1) return percent1.format(value)
-    return currency0.format(value)
-}
-
 function extractCatalogCards(raw: any): CreditCardProduct[] {
     if (!raw) return []
     if (Array.isArray(raw)) return raw
@@ -481,11 +499,10 @@ function buildAppliedMatcher(cards: CardRowType[]) {
         const pName = norm(p.product_name)
         const pIssuer = norm(p.issuer)
         const pJoined = `${pIssuer} ${pName}`.trim()
-        return (
-            (p.slug && slugSet.has(p.slug)) ||
-            (pName && nameSet.has(pName)) ||
-            (pIssuer && pName && issuerNameSet.has(pJoined))
-        )
+        const slugMatch = p.slug ? slugSet.has(p.slug) : false
+        const nameMatch = pName ? nameSet.has(pName) : false
+        const issuerMatch = pIssuer && pName ? issuerNameSet.has(pJoined) : false
+        return slugMatch || nameMatch || issuerMatch
     }
 }
 
@@ -495,6 +512,7 @@ type CatalogCreditCardProps = {
     product: CreditCardProduct
     applied: boolean
     onApply: () => void
+    isPending?: boolean
 }
 
 function gradientFor(product: CreditCardProduct) {
@@ -506,7 +524,7 @@ function gradientFor(product: CreditCardProduct) {
     return "from-violet-500 via-purple-500 to-fuchsia-600"
 }
 
-function CatalogCreditCard({ product, applied, onApply }: CatalogCreditCardProps) {
+function CatalogCreditCard({ product, applied, onApply, isPending = false }: CatalogCreditCardProps) {
     const gradient = gradientFor(product)
     const issuer = (product.issuer ?? "").toUpperCase()
     const name = product.product_name
@@ -559,8 +577,8 @@ function CatalogCreditCard({ product, applied, onApply }: CatalogCreditCardProps
                             Applied
                         </Button>
                     ) : (
-                        <Button size="sm" onClick={onApply}>
-                            Apply
+                        <Button size="sm" onClick={onApply} disabled={isPending}>
+                            {isPending ? "Applying…" : "Apply"}
                         </Button>
                     )}
                     {product.link_url ? (

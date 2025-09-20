@@ -161,3 +161,15 @@ export type RecommendationResponse = {
   cards: RecommendationCard[]
   explanation: string
 }
+
+export type ChatMessage = {
+  id: string
+  author: "user" | "assistant"
+  content: string
+  timestamp: string
+}
+
+export type ChatResponse = {
+  reply: string
+  timestamp: string
+}

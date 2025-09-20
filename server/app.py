@@ -9,12 +9,11 @@ from jose import jwt
 from jose.exceptions import JWTError
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
-from pymongo.errors import DuplicateKeyError
-from pymongo.errors import OperationFailure
+from pymongo.errors import CollectionInvalid, DuplicateKeyError, OperationFailure
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
-from llm.gemini import explain_recommendations
+from llm.gemini import explain_recommendations, generate_chat_response
 from services.scoring import score_catalog
 from services.spend import aggregate_spend_details, build_category_rules, compute_user_mix, load_transactions
 
@@ -168,6 +167,17 @@ def ensure_indexes(database) -> None:
     safe_create_index(cards, [("slug", ASCENDING)], unique=True, name="slug_1")
 
     # add others here only if you actually use them (merchants, applications, etc.)
+
+
+def ensure_collections(database) -> None:
+    """Create required collections if they do not already exist."""
+
+    existing = set(database.list_collection_names())
+    if "applications" not in existing:
+        try:
+            database.create_collection("applications")
+        except CollectionInvalid:
+            pass
 
 
 
@@ -366,6 +376,7 @@ def create_app() -> Flask:
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
     ensure_indexes(database)
+    ensure_collections(database)
 
     app.config.update(
         AUTH_SETTINGS=app_settings,
@@ -913,6 +924,104 @@ def create_app() -> Flask:
                 "explanation": explanation,
             }
         )
+
+    @api_bp.post("/applications")
+    def create_application():
+        user = g.current_user
+        payload = request.get_json(force=True) or {}
+
+        slug = payload.get("slug")
+        product_name = payload.get("product_name")
+        issuer = payload.get("issuer")
+
+        if not isinstance(slug, str) or not slug.strip():
+            raise BadRequest("slug is required")
+        if not isinstance(product_name, str) or not product_name.strip():
+            raise BadRequest("product_name is required")
+        if not isinstance(issuer, str) or not issuer.strip():
+            raise BadRequest("issuer is required")
+
+        document = {
+            "userId": user["_id"],
+            "product_slug": slug.strip(),
+            "product_name": product_name.strip(),
+            "issuer": issuer.strip(),
+            "status": "started",
+            "applied_at": datetime.utcnow(),
+        }
+
+        result = database["applications"].insert_one(document)
+
+        return (
+            jsonify({"status": "ok", "applicationId": str(result.inserted_id)}),
+            201,
+        )
+
+    @api_bp.post("/chat")
+    def chat_with_finbot():
+        user = g.current_user
+        payload = request.get_json(force=True) or {}
+
+        new_message = payload.get("newMessage")
+        if not isinstance(new_message, str) or not new_message.strip():
+            raise BadRequest("newMessage is required")
+        message_text = new_message.strip()
+
+        history_payload = payload.get("history")
+        history: List[Dict[str, str]] = []
+        if isinstance(history_payload, list):
+            for entry in history_payload[-20:]:
+                if not isinstance(entry, dict):
+                    continue
+                author = entry.get("author")
+                content = entry.get("content")
+                if author not in ("user", "assistant"):
+                    continue
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                history.append(
+                    {
+                        "author": author,
+                        "content": content.strip(),
+                        "timestamp": entry.get("timestamp"),
+                    }
+                )
+
+        window_days = 90
+        mix, total_spend, _ = compute_user_mix(database, user["_id"], window_days, None)
+
+        if total_spend > 0 and window_days > 0:
+            monthly_total = (total_spend / window_days) * 30
+        elif mix:
+            monthly_total = 1000.0
+        else:
+            monthly_total = 0.0
+
+        recommendations: List[Dict[str, Any]] = []
+        if mix and monthly_total > 0:
+            catalog_cards = list(database["credit_cards"].find({"active": True}))
+            if catalog_cards:
+                scored = score_catalog(
+                    catalog_cards,
+                    mix,
+                    monthly_total,
+                    window_days,
+                    limit=3,
+                )
+                for card in scored[:3]:
+                    recommendations.append(
+                        {
+                            "product_name": card.get("product_name"),
+                            "issuer": card.get("issuer"),
+                            "net": card.get("net"),
+                            "slug": card.get("slug"),
+                        }
+                    )
+
+        response_text = generate_chat_response(mix, recommendations, history, message_text)
+        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+        return jsonify({"reply": response_text, "timestamp": timestamp})
 
     @api_bp.get("/cards")
     def list_cards():

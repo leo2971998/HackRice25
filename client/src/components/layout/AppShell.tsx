@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "./ThemeToggle"
 import { useMe } from "@/hooks/useApi"
 import { authConfig } from "@/lib/env"
+import { ChatWidget } from "@/components/chat/ChatWidget"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const auth = authConfig.disableAuth ? null : useAuth0()
@@ -85,6 +86,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </section>
         <div className="space-y-8">{children}</div>
       </main>
+      <ChatWidget />
     </div>
   )
 }
