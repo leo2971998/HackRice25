@@ -1,4 +1,4 @@
-import { CreditCard, Trash2 } from "lucide-react"
+import { CreditCard, Edit, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -9,9 +9,10 @@ type CardRowProps = {
   isSelected?: boolean
   onSelect?: (id: string) => void
   onDelete?: (id: string) => void
+  onEdit?: (id: string) => void
 }
 
-export function CardRow({ card, isSelected, onSelect, onDelete }: CardRowProps) {
+export function CardRow({ card, isSelected, onSelect, onDelete, onEdit }: CardRowProps) {
   return (
     <button
       type="button"
@@ -34,6 +35,21 @@ export function CardRow({ card, isSelected, onSelect, onDelete }: CardRowProps) 
       </div>
       <div className="flex items-center gap-2">
         <span className="text-xs text-muted-foreground">{card.status}</span>
+        {onEdit ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground"
+            onClick={(event) => {
+              event.stopPropagation()
+              onEdit(card.id)
+            }}
+          >
+            <Edit className="h-4 w-4" />
+            <span className="sr-only">Edit card</span>
+          </Button>
+        ) : null}
         {onDelete ? (
           <Button
             type="button"

@@ -10,11 +10,12 @@ type CardSelectorProps = {
   selectedId?: string
   onSelect?: (id: string) => void
   onDelete?: (id: string) => void
+  onEdit?: (id: string) => void
   onAdd?: () => void
   isLoading?: boolean
 }
 
-export function CardSelector({ cards, selectedId, onSelect, onDelete, onAdd, isLoading }: CardSelectorProps) {
+export function CardSelector({ cards, selectedId, onSelect, onDelete, onEdit, onAdd, isLoading }: CardSelectorProps) {
   return (
     <Card className="flex h-full flex-col rounded-3xl">
       <CardHeader className="flex-none space-y-4">
@@ -39,6 +40,7 @@ export function CardSelector({ cards, selectedId, onSelect, onDelete, onAdd, isL
                 isSelected={card.id === selectedId}
                 onSelect={onSelect}
                 onDelete={onDelete}
+                onEdit={onEdit}
               />
             ))}
           </div>

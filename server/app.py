@@ -397,9 +397,20 @@ def create_app() -> Flask:
         user = g.current_user
         window_days = parse_window_days(30)
         cutoff = datetime.utcnow() - timedelta(days=window_days)
-        transactions = list(
-            database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}})
-        )
+        
+        # Get card IDs from query parameters for filtering
+        card_ids = request.args.getlist('cardIds')
+        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
+        
+        if card_ids:
+            # Convert string IDs to ObjectIds and add to filter
+            try:
+                object_ids = [validate_object_id(card_id) for card_id in card_ids]
+                transaction_filter["accountId"] = {"$in": object_ids}
+            except:
+                pass  # If invalid IDs, ignore filtering
+        
+        transactions = list(database["transactions"].find(transaction_filter))
         total, count, by_category = calculate_summary(transactions)
         accounts_count = database["accounts"].count_documents({"userId": user["_id"], "account_type": "credit_card"})
         categories = [
@@ -418,14 +429,27 @@ def create_app() -> Flask:
         user = g.current_user
         window_days = parse_window_days(30)
         limit_raw = request.args.get("limit", 8)
+        card_ids = request.args.getlist('cardIds')
+        
         try:
             limit = int(limit_raw)
         except (TypeError, ValueError):
             raise BadRequest("limit must be an integer")
         if limit <= 0:
             raise BadRequest("limit must be positive")
+            
         cutoff = datetime.utcnow() - timedelta(days=window_days)
-        txns = list(database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}}))
+        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
+        
+        if card_ids:
+            # Convert string IDs to ObjectIds and add to filter
+            try:
+                object_ids = [validate_object_id(card_id) for card_id in card_ids]
+                transaction_filter["accountId"] = {"$in": object_ids}
+            except:
+                pass  # If invalid IDs, ignore filtering
+                
+        txns = list(database["transactions"].find(transaction_filter))
         merchants_map: Dict[str, Dict[str, Any]] = {}
         for txn in txns:
             name = txn.get("merchant_id") or txn.get("description_clean") or txn.get("description") or "Merchant"
@@ -455,8 +479,20 @@ def create_app() -> Flask:
     def money_moments():
         user = g.current_user
         window_days = parse_window_days(30)
+        card_ids = request.args.getlist('cardIds')
+        
         cutoff = datetime.utcnow() - timedelta(days=window_days)
-        txns = list(database["transactions"].find({"userId": user["_id"], "date": {"$gte": cutoff}}))
+        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
+        
+        if card_ids:
+            # Convert string IDs to ObjectIds and add to filter
+            try:
+                object_ids = [validate_object_id(card_id) for card_id in card_ids]
+                transaction_filter["accountId"] = {"$in": object_ids}
+            except:
+                pass  # If invalid IDs, ignore filtering
+                
+        txns = list(database["transactions"].find(transaction_filter))
         moments = list(calculate_money_moments(window_days, txns))
         return jsonify(moments)
 
@@ -469,6 +505,70 @@ def create_app() -> Flask:
             .sort("nickname", ASCENDING)
         )
         return jsonify([format_card_row(card) for card in cards])
+
+    @api_bp.get("/cards/debug")
+    def debug_cards():
+        """Debug endpoint to help troubleshoot card data issues"""
+        user = g.current_user
+        
+        # Check all cards in the database
+        all_cards = list(database["accounts"].find({"account_type": "credit_card"}))
+        user_cards = list(database["accounts"].find({"userId": user["_id"], "account_type": "credit_card"}))
+        
+        return jsonify({
+            "user_id": str(user["_id"]),
+            "user_email": user.get("email"),
+            "total_cards_in_db": len(all_cards),
+            "user_cards_count": len(user_cards),
+            "all_cards_preview": [
+                {
+                    "id": str(card["_id"]),
+                    "userId": str(card.get("userId", "N/A")),
+                    "nickname": card.get("nickname", "N/A"),
+                    "issuer": card.get("issuer", "N/A"),
+                    "account_type": card.get("account_type", "N/A")
+                }
+                for card in all_cards[:10]  # Limit to first 10 for debugging
+            ],
+            "user_cards": [format_card_row(card) for card in user_cards]
+        })
+
+    @api_bp.post("/cards/import")
+    def import_existing_card():
+        """Import an existing card by updating its userId to the current user"""
+        user = g.current_user
+        payload = request.get_json(silent=True) or {}
+        card_id = payload.get("card_id")
+        
+        if not card_id:
+            raise BadRequest("card_id is required")
+        
+        try:
+            card_object_id = validate_object_id(card_id)
+        except:
+            raise BadRequest("Invalid card_id format")
+            
+        # Find the card
+        card = database["accounts"].find_one({
+            "_id": card_object_id,
+            "account_type": "credit_card"
+        })
+        
+        if not card:
+            raise NotFound("Card not found")
+            
+        # Update the card to belong to the current user
+        database["accounts"].update_one(
+            {"_id": card_object_id},
+            {
+                "$set": {
+                    "userId": user["_id"],
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        return jsonify({"id": str(card_object_id), "message": "Card imported successfully"}), 200
 
     @api_bp.post("/cards")
     def add_card():

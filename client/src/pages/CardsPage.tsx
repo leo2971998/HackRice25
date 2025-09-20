@@ -7,8 +7,12 @@ import { StatTile } from "@/components/cards/StatTile"
 import { CardSelector } from "@/components/cards/CardSelector"
 import { CreditCardDisplay } from "@/components/cards/CreditCardDisplay"
 import { AddCardDialog } from "@/components/cards/AddCardDialog"
+import { EditCardDialog } from "@/components/cards/EditCardDialog"
+import { ImportCardDialog } from "@/components/cards/ImportCardDialog"
 import { useCards, useCard, useDeleteCard } from "@/hooks/useCards"
 import { useToast } from "@/components/ui/use-toast"
+import { apiFetch } from "@/lib/api-client"
+import type { CardRow } from "@/types/api"
 
 const currencyFormatter = new Intl.NumberFormat(undefined, {
   style: "currency",
@@ -48,11 +52,37 @@ export default function CardsPage() {
   }, [cards, selectedId])
 
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [editingCard, setEditingCard] = useState<CardRow | null>(null)
+  const [debugInfo, setDebugInfo] = useState<any>(null)
+  const [showDebug, setShowDebug] = useState(false)
   const summary = cardDetails.data?.summary
   const donutData = useMemo(() => summary?.byCategory ?? [], [summary])
 
   const handleDelete = (id: string) => {
     deleteCard.mutate(id)
+  }
+
+  const handleEdit = (id: string) => {
+    const card = cards.find(c => c.id === id)
+    if (card) {
+      setEditingCard(card)
+      setEditDialogOpen(true)
+    }
+  }
+
+  const handleDebug = async () => {
+    try {
+      const result = await apiFetch("/cards/debug")
+      setDebugInfo(result)
+      setShowDebug(true)
+    } catch (error) {
+      toast({
+        title: "Debug failed",
+        description: error instanceof Error ? error.message : "Unable to fetch debug info",
+      })
+    }
   }
 
   return (
@@ -64,6 +94,7 @@ export default function CardsPage() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onDelete={handleDelete}
+            onEdit={handleEdit}
             onAdd={() => setDialogOpen(true)}
             isLoading={cardsQuery.isLoading}
           />
@@ -125,15 +156,37 @@ export default function CardsPage() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <p>Add your first card to unlock tailored coaching and spend insights.</p>
-                <Button onClick={() => setDialogOpen(true)}>
-                  Link a card
-                </Button>
+                <div className="flex flex-col gap-2">
+                  <Button onClick={() => setDialogOpen(true)}>
+                    Link a card
+                  </Button>
+                  <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+                    Import existing card
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleDebug}>
+                    Debug card data
+                  </Button>
+                </div>
+                {showDebug && debugInfo && (
+                  <div className="mt-4 p-3 bg-muted rounded-md text-xs">
+                    <pre>{JSON.stringify(debugInfo, null, 2)}</pre>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
         </div>
       </div>
       <AddCardDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <EditCardDialog 
+        open={editDialogOpen} 
+        onOpenChange={setEditDialogOpen} 
+        card={editingCard}
+      />
+      <ImportCardDialog 
+        open={importDialogOpen} 
+        onOpenChange={setImportDialogOpen} 
+      />
     </div>
   )
 }
