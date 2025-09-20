@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -15,7 +15,7 @@ import axios from "axios";
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || "http://localhost:8000/api",
   withCredentials: true,
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", Accept: "application/json" },
 });
 
 type BestCardResult = {
@@ -55,18 +55,51 @@ const usd = new Intl.NumberFormat(undefined, {
 });
 
 export function BestCardFinder({
-  merchantOptions,
   selectedCardIds,
   accountRows,
 }: {
-  merchantOptions: string[];
   selectedCardIds?: string[];
   accountRows: { id: string; nickname: string; issuer: string }[];
 }) {
   const [merchant, setMerchant] = useState("");
+  const [allMerchants, setAllMerchants] = useState<MerchantRow[]>([]);
+  const [loadingMerchants, setLoadingMerchants] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BestCardResult | null>(null);
+
+  // --- inline API call to get ALL merchants (no exports) ---
+  async function getAllMerchants(limit = 2000): Promise<MerchantRow[]> {
+    const res = await api.get("/merchants/all", { params: { limit } });
+    return res.data.items as MerchantRow[];
+  }
+
+  // load once on mount
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setLoadingMerchants(true);
+        setLoadError(null);
+        const items = await getAllMerchants(2000);
+        if (mounted) setAllMerchants(items);
+      } catch (e: any) {
+        if (mounted) setLoadError(e?.message || "Failed to load merchants");
+      } finally {
+        if (mounted) setLoadingMerchants(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const merchantOptions = useMemo(
+    () => allMerchants.map((m) => m.name).filter(Boolean),
+    [allMerchants]
+  );
 
   const filteredSuggestions = useMemo(() => {
     if (!merchant) return merchantOptions.slice(0, 6);
@@ -87,12 +120,13 @@ export function BestCardFinder({
     setResult(null);
 
     try {
-      // Fake API delay
+      // mock delay
       await new Promise((r) => setTimeout(r, 600));
 
-      // Simple conditional mock data
+      // mock results based on input
       let mockData: BestCardResult;
-      if (merchant.toLowerCase().includes("starbucks")) {
+      const m = merchant.toLowerCase();
+      if (m.includes("starbucks")) {
         mockData = {
           merchant: merchant.trim(),
           bestCard: {
@@ -112,7 +146,7 @@ export function BestCardFinder({
             },
           ],
         };
-      } else if (merchant.toLowerCase().includes("amazon")) {
+      } else if (m.includes("amazon")) {
         mockData = {
           merchant: merchant.trim(),
           bestCard: {
@@ -175,19 +209,30 @@ export function BestCardFinder({
           Best card for a merchant
         </CardTitle>
         <CardDescription>
-          Type a store or pick one from your recent merchants.
+          Type a store and we’ll suggest the best card. Autocomplete is built
+          from your DB.
         </CardDescription>
       </CardHeader>
+
       <CardContent className="space-y-6">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
           <div className="sm:col-span-8 space-y-2">
             <Label htmlFor="merchant">Merchant</Label>
             <Input
               id="merchant"
-              placeholder="e.g., Starbucks, Amazon, H-E-B"
+              placeholder={
+                loadingMerchants
+                  ? "Loading merchants…"
+                  : "e.g., Starbucks, Amazon, H-E-B"
+              }
               value={merchant}
               onChange={(e) => setMerchant(e.target.value)}
+              disabled={loadingMerchants}
             />
+            {loadError && (
+              <div className="text-xs text-destructive pt-1">{loadError}</div>
+            )}
+
             {filteredSuggestions.length > 0 && (
               <div className="flex flex-wrap gap-2 pt-1">
                 {filteredSuggestions.map((m) => (
@@ -203,8 +248,13 @@ export function BestCardFinder({
               </div>
             )}
           </div>
+
           <div className="sm:col-span-4 flex items-end">
-            <Button className="w-full" onClick={onFind} disabled={isLoading}>
+            <Button
+              className="w-full"
+              onClick={onFind}
+              disabled={isLoading || loadingMerchants}
+            >
               {isLoading ? "Finding…" : "Find best card"}
             </Button>
           </div>
@@ -218,8 +268,7 @@ export function BestCardFinder({
 
         {!error && !isLoading && !result && (
           <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
-            Enter a merchant to see the best card. We will also show tips to
-            save more.
+            Start typing a merchant. We’ll use your seeded list for suggestions.
           </div>
         )}
 

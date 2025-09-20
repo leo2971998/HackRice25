@@ -138,6 +138,10 @@ def ensure_indexes(database) -> None:
     credit_cards.create_index([("issuer", ASCENDING), ("network", ASCENDING)])
     credit_cards.create_index([("slug", ASCENDING)], unique=True, name="slug_1")
 
+    merchants = database["merchants"]
+    merchants.create_index([("name", ASCENDING)])
+    merchants.create_index([("slug", ASCENDING)])
+
 
 def merge_preferences(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
     merged = {**existing}
@@ -320,15 +324,16 @@ def create_app() -> Flask:
     # Only load Auth0 settings if we actually need them
     app_settings = None if disable_auth else get_auth_settings()
 
-    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")
+    allowed_origin = os.environ.get("CLIENT_ORIGIN", "http://localhost:5173").rstrip("/")
     CORS(
         app,
-        resources={r"/api/*": {"origins": [allowed_origin]}},
+        resources={r"/api/*": {"origins": [allowed_origin, "http://127.0.0.1:5173"]}},
         supports_credentials=True,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
-        expose_headers=["Content-Type"]
+        expose_headers=["Content-Type"],
     )
+
 
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
@@ -1039,7 +1044,6 @@ def create_app() -> Flask:
         database["accounts"].delete_one({"_id": card["_id"]})
         return ("", 204)
 
-    app.register_blueprint(api_bp)
 
     @app.route("/api/health", methods=["GET"])
     def health_check():
@@ -1069,12 +1073,73 @@ def create_app() -> Flask:
         response.status_code = 404
         return response
 
+    @api_bp.get("/merchants/all")
+    def list_all_merchants():
+        """
+        Return all seeded merchants (not user-specific).
+        Supports optional limit/offset to avoid huge payloads.
+        GET /api/merchants/all?limit=1000&offset=0
+        """
+        db = app.config["MONGO_DB"]
+        coll = db["merchants"]
+
+        limit_raw = request.args.get("limit", 1000)
+        offset_raw = request.args.get("offset", 0)
+
+        try:
+            limit = max(1, min(int(limit_raw), 5000))  # hard cap
+            offset = max(0, int(offset_raw))
+        except (TypeError, ValueError):
+            raise BadRequest("limit/offset must be integers")
+
+        cursor = (
+            coll.find(
+                {},
+                {
+                    "_id": 1,
+                    "name": 1,
+                    "slug": 1,
+                    "mcc": 1,
+                    "primaryCategory": 1,
+                    "brandGroup": 1,
+                    "aliases": 1,
+                    "domains": 1,
+                    "tags": 1,
+                },
+            )
+            .sort("name", ASCENDING)
+            .skip(offset)
+            .limit(limit)
+        )
+
+        items = [
+            {
+                "id": str(doc["_id"]),
+                "name": doc.get("name", ""),
+                "slug": doc.get("slug", ""),
+                "mcc": doc.get("mcc"),
+                "primaryCategory": doc.get("primaryCategory"),
+                "brandGroup": doc.get("brandGroup"),
+                "aliases": doc.get("aliases", []),
+                "domains": doc.get("domains", []),
+                "tags": doc.get("tags", []),
+            }
+            for doc in cursor
+        ]
+
+        total = coll.estimated_document_count()
+        return jsonify({"items": items, "total": total, "limit": limit, "offset": offset})
+    app.register_blueprint(api_bp)
+
+    
+
+
     return app
 
 
 if __name__ == "__main__":
     # Create and run the Flask app directly (use Flask CLI in production)
     app = create_app()
-    port = int(os.environ.get("PORT", "5000"))
+    port = int(os.environ.get("PORT", "8000"))
     debug = os.environ.get("FLASK_DEBUG", "1") in ("1", "true", "True")
     app.run(host="0.0.0.0", port=port, debug=debug)
