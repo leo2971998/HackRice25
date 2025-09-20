@@ -126,7 +126,7 @@ def create_app() -> Flask:
     users_collection.create_index([("email", ASCENDING)], unique=True, sparse=True)
 
     cards_collection = database["cards"]
-    cards_collection.create_index(["created_at", ASCENDING])
+    cards_collection.create_index([("created_at", ASCENDING)])
 
     auth_decorator = requires_auth(app_settings)
 
@@ -211,6 +211,39 @@ def create_app() -> Flask:
     def get_options():
         doc = options_collection.find_one({"_id": "dropdowns"}) or {}
         return jsonify({"issuers" : doc.get("issuers", []), "networks" : doc.get("networks", []) })
+    
+    # GET Card Products
+    @app.get("/api/issuers")
+    def get_issuers():
+        issuers = database["card_products"].distinct("issuer")
+        issuers.sort()
+        return jsonify(issuers)
+
+    @app.get("/api/networks")
+    def get_networks():
+        issuer = request.args.get("issuer")
+        if not issuer:
+            return jsonify([])
+        
+        networks = database["card_products"].distinct("network", {"issuer" : issuer})
+        networks.sort()
+        return jsonify(networks)
+
+    @app.get("/api/products")
+    def get_products():
+        issuer = request.args.get("issuer")
+        network = request.args.get("network")
+        query = {}
+
+        if issuer:
+            query["issuer"] = issuer
+        if network:
+            query["network"] = network
+        
+        products = database["card_products"].find(query, {"_id": 0, "product": 1}).sort("product", 1)
+        return jsonify([p["product"] for p in products])
+
+
 
     return app
 
