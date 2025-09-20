@@ -11,8 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useAccounts, useMe, useUpdateMe } from "@/hooks/useApi"
-import { useDeleteCard } from "@/hooks/useCards"
+import { useMe, useUpdateMe } from "@/hooks/useApi"
 import { useToast } from "@/components/ui/use-toast"
 import type { Preferences } from "@/types/api"
 
@@ -32,21 +31,6 @@ const CURRENCIES = [
 export function SettingsPage() {
   const { toast } = useToast()
   const meQuery = useMe()
-  const accountsQuery = useAccounts()
-  const deleteCard = useDeleteCard({
-    onSuccess: () => {
-      toast({
-        title: "Card removed",
-        description: "We’ll update your settings shortly.",
-      })
-    },
-    onError: (error) => {
-      toast({
-        title: "Unable to remove card",
-        description: error.message,
-      })
-    },
-  })
   const updateMe = useUpdateMe({
     onSuccess: () => {
       toast({
@@ -63,8 +47,6 @@ export function SettingsPage() {
   })
 
   const me = meQuery.data
-  const accounts = accountsQuery.data ?? []
-
   const [name, setName] = useState("")
   const [preferences, setPreferences] = useState<Preferences | null>(null)
 
@@ -234,40 +216,6 @@ export function SettingsPage() {
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-3xl">
-        <CardHeader>
-          <CardTitle className="text-lg font-semibold">Connected cards</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {accountsQuery.isLoading ? (
-            <div className="text-sm text-muted-foreground">Loading linked cards…</div>
-          ) : accounts.length ? (
-            accounts.map((card) => (
-              <div
-                key={card.id}
-                className="flex flex-col gap-2 rounded-2xl border border-border/60 bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{card.nickname}</p>
-                  <p className="text-xs text-muted-foreground">{card.issuer} •••• {card.mask}</p>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => deleteCard.mutate(card.id)}
-                  disabled={deleteCard.isPending}
-                >
-                  Remove
-                </Button>
-              </div>
-            ))
-          ) : (
-            <p className="text-sm text-muted-foreground">No cards connected yet.</p>
-          )}
         </CardContent>
       </Card>
 

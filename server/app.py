@@ -13,6 +13,9 @@ from pymongo.errors import DuplicateKeyError
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
+from .routes.home import register_home_routes
+from .routes.rewards import register_rewards_routes
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
@@ -332,6 +335,9 @@ def create_app() -> Flask:
         user_doc = get_or_create_user(database["users"], payload)
         g.current_user = user_doc
 
+    register_home_routes(api_bp, database)
+    register_rewards_routes(api_bp, database)
+
     @api_bp.get("/me")
     def get_me():
         user = g.current_user
@@ -391,89 +397,6 @@ def create_app() -> Flask:
     @api_bp.post("/auth/resend-verification")
     def resend_verification():
         return ("", 204)
-
-    @api_bp.get("/spend/summary")
-    def spend_summary():
-        user = g.current_user
-        window_days = parse_window_days(30)
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        
-        # Get card IDs from query parameters for filtering
-        card_ids = request.args.getlist('cardIds')
-        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
-        
-        if card_ids:
-            # Convert string IDs to ObjectIds and add to filter
-            try:
-                object_ids = [validate_object_id(card_id) for card_id in card_ids]
-                transaction_filter["accountId"] = {"$in": object_ids}
-            except:
-                pass  # If invalid IDs, ignore filtering
-        
-        transactions = list(database["transactions"].find(transaction_filter))
-        total, count, by_category = calculate_summary(transactions)
-        accounts_count = database["accounts"].count_documents({"userId": user["_id"], "account_type": "credit_card"})
-        categories = [
-            {"name": name, "total": round(value, 2)}
-            for name, value in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
-        ]
-        return jsonify(
-            {
-                "stats": {"totalSpend": round(total, 2), "txns": count, "accounts": accounts_count},
-                "byCategory": categories,
-            }
-        )
-
-    @api_bp.get("/merchants")
-    def merchants():
-        user = g.current_user
-        window_days = parse_window_days(30)
-        limit_raw = request.args.get("limit", 8)
-        card_ids = request.args.getlist('cardIds')
-        
-        try:
-            limit = int(limit_raw)
-        except (TypeError, ValueError):
-            raise BadRequest("limit must be an integer")
-        if limit <= 0:
-            raise BadRequest("limit must be positive")
-            
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
-        transaction_filter = {"userId": user["_id"], "date": {"$gte": cutoff}}
-        
-        if card_ids:
-            # Convert string IDs to ObjectIds and add to filter
-            try:
-                object_ids = [validate_object_id(card_id) for card_id in card_ids]
-                transaction_filter["accountId"] = {"$in": object_ids}
-            except:
-                pass  # If invalid IDs, ignore filtering
-                
-        txns = list(database["transactions"].find(transaction_filter))
-        merchants_map: Dict[str, Dict[str, Any]] = {}
-        for txn in txns:
-            name = txn.get("merchant_id") or txn.get("description_clean") or txn.get("description") or "Merchant"
-            category = txn.get("category") or "General"
-            entry = merchants_map.setdefault(
-                name,
-                {"id": name, "name": name, "category": category, "count": 0, "total": 0.0, "logoUrl": txn.get("logoUrl", "")},
-            )
-            entry["count"] += 1
-            entry["total"] += float(txn.get("amount", 0))
-        ordered = sorted(merchants_map.values(), key=lambda item: item["total"], reverse=True)
-        return jsonify(
-            [
-                {
-                    "id": m["id"],
-                    "name": m["name"],
-                    "category": m["category"],
-                    "count": m["count"],
-                    "total": round(m["total"], 2),
-                    "logoUrl": m.get("logoUrl", ""),
-                }
-                for m in ordered[:limit]
-            ]
-        )
 
     @api_bp.get("/money-moments")
     def money_moments():

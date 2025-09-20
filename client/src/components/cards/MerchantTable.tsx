@@ -1,8 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import type { MerchantRow } from "@/types/api"
+import type { MerchantBreakdownRow } from "@/types/api"
 
 export type MerchantTableProps = {
-  merchants: MerchantRow[]
+  merchants: MerchantBreakdownRow[]
   isLoading?: boolean
 }
 
@@ -30,25 +30,17 @@ export function MerchantTable({ merchants, isLoading }: MerchantTableProps) {
               </thead>
               <tbody className="divide-y divide-border/60">
                 {merchants.map((merchant) => (
-                  <tr key={merchant.id} className="transition hover:bg-muted/40">
+                  <tr
+                    key={`${merchant.merchant}-${merchant.subcategory}`}
+                    className="transition hover:bg-muted/40"
+                  >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted">
-                          {merchant.logoUrl ? (
-                            <img
-                              src={merchant.logoUrl}
-                              alt={merchant.name}
-                              className="h-8 w-8 rounded-2xl object-cover"
-                              loading="lazy"
-                            />
-                          ) : (
-                            <span className="text-sm font-medium text-muted-foreground">
-                              {merchant.name.substring(0, 2).toUpperCase()}
-                            </span>
-                          )}
+                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted text-sm font-medium text-muted-foreground">
+                          {merchant.merchant.substring(0, 2).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-medium text-foreground">{merchant.name}</p>
+                          <p className="font-medium text-foreground">{merchant.merchant}</p>
                           <p className="text-xs text-muted-foreground">Recent activity</p>
                         </div>
                       </div>

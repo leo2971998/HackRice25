@@ -1,16 +1,14 @@
-import { useState } from "react"
 import { Link } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import { StatTile } from "@/components/cards/StatTile"
 import { DonutChart } from "@/components/charts/DonutChart"
 import { MerchantTable } from "@/components/cards/MerchantTable"
 import { MoneyMomentCard } from "@/components/cards/MoneyMomentCard"
 import { PageSection } from "@/components/layout/PageSection"
-import { useAccounts, useMe, useMerchants, useMoneyMoments, useSpendSummary } from "@/hooks/useApi"
-import type { CardRow } from "@/types/api"
+import { BreakdownList } from "@/components/BreakdownList"
+import { useCategorySummary, useCashbackEstimate, useMerchantBreakdown, useMe, useMoneyMoments } from "@/hooks/useApi"
 
 const currencyFormatter = new Intl.NumberFormat(undefined, {
   style: "currency",
@@ -18,59 +16,21 @@ const currencyFormatter = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
 })
 
-function formatLastSynced(card: CardRow) {
-  if (!card.lastSynced) return "Not synced yet"
-  const date = new Date(card.lastSynced)
-  if (Number.isNaN(date.getTime())) {
-    return "Synced recently"
-  }
-  return `Synced ${date.toLocaleDateString()}`
-}
-
 export function HomePage() {
   const { data: me } = useMe()
-  const accounts = useAccounts()
-  const accountRows = accounts.data ?? []
-  
-  // State for selected cards for filtering
-  const [selectedCardIds, setSelectedCardIds] = useState<string[]>([])
-  
-  // Use selected card IDs for filtering data (empty array means all cards)
-  const cardIdsForFiltering = selectedCardIds.length > 0 ? selectedCardIds : undefined
-  
-  const summary = useSpendSummary(30, { cardIds: cardIdsForFiltering })
-  const merchants = useMerchants({ limit: 8, windowDays: 30, cardIds: cardIdsForFiltering })
-  const moments = useMoneyMoments(30, { cardIds: cardIdsForFiltering })
+  const summary = useCategorySummary(30)
+  const merchants = useMerchantBreakdown({ windowDays: 90, limit: 6 })
+  const moments = useMoneyMoments(30)
+  const cashback = useCashbackEstimate({ windowDays: 90 })
 
   const stats = summary.data?.stats ?? { totalSpend: 0, txns: 0, accounts: 0 }
   const categories = summary.data?.byCategory ?? []
+  const others = summary.data?.others ?? { total: 0, share: 0, count: 0 }
   const merchantRows = merchants.data ?? []
   const momentsList = moments.data ?? []
+  const cashbackData = cashback.data
 
   const greeting = me?.name?.trim() || (me?.email ? me.email.split("@")[0] : "there")
-
-  // Helper functions for card selection
-  const handleCardToggle = (cardId: string) => {
-    setSelectedCardIds(prev => 
-      prev.includes(cardId) 
-        ? prev.filter(id => id !== cardId)
-        : [...prev, cardId]
-    )
-  }
-
-  const handleSelectAllCards = () => {
-    setSelectedCardIds(accountRows.map(card => card.id))
-  }
-
-  const handleClearSelection = () => {
-    setSelectedCardIds([])
-  }
-
-  const selectedCardsText = selectedCardIds.length === 0 
-    ? "All cards" 
-    : selectedCardIds.length === accountRows.length 
-      ? "All cards"
-      : `${selectedCardIds.length} selected card${selectedCardIds.length > 1 ? 's' : ''}`
 
   return (
     <div className="space-y-10">
@@ -83,7 +43,7 @@ export function HomePage() {
               <Link to="/recommendations">Explore recommendations</Link>
             </Button>
             <Button asChild>
-              <Link to="/setup">Link a new account</Link>
+              <Link to="/spending">Open spending details</Link>
             </Button>
           </div>
         }
@@ -98,74 +58,84 @@ export function HomePage() {
           </div>
         </div>
 
-        <Card className="md:col-span-5 min-h-[16rem] rounded-3xl">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Spending mix</CardTitle>
+        <Card className="md:col-span-7 min-h-[18rem] rounded-3xl">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg font-semibold">Spending mix</CardTitle>
+              <Button asChild size="sm" variant="ghost">
+                <Link to="/spending">View details</Link>
+              </Button>
+            </div>
           </CardHeader>
-          <CardContent className="h-64 p-0">
-            <DonutChart data={categories} isLoading={summary.isLoading} emptyMessage="No spending yet in the last 30 days." />
+          <CardContent className="grid gap-4 p-0 md:grid-cols-2">
+            <div className="flex items-center justify-center">
+              <DonutChart
+                data={categories}
+                isLoading={summary.isLoading}
+                emptyMessage="No spending yet in the last 30 days."
+              />
+            </div>
+            <div className="flex flex-col justify-center gap-2 border-t border-border/60 px-6 py-6 md:border-l md:border-t-0">
+              <BreakdownList
+                isLoading={summary.isLoading}
+                categories={categories}
+                others={others}
+              />
+            </div>
           </CardContent>
         </Card>
 
-        <div className="md:col-span-4">
+        <Card className="md:col-span-5 min-h-[18rem] rounded-3xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold">Cashback pulse</CardTitle>
+            <p className="text-sm text-muted-foreground">Estimated rewards from your recent spending.</p>
+          </CardHeader>
+          <CardContent className="flex h-full flex-col justify-between gap-4">
+            {cashback.isLoading ? (
+              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                Calculating rewards…
+              </div>
+            ) : cashbackData ? (
+              <>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Est. rewards this period</p>
+                  <p className="text-3xl font-semibold text-foreground">
+                    {currencyFormatter.format(cashbackData.estimatedRewards)}
+                  </p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Period spend: {currencyFormatter.format(cashbackData.periodSpend)}
+                  </p>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <p className="font-medium text-foreground">
+                    Best card: {cashbackData.bestCard ? cashbackData.bestCard.name : "No match yet"}
+                    {cashbackData.bestCard?.issuer ? ` (${cashbackData.bestCard.issuer})` : ""}
+                  </p>
+                  <ul className="space-y-1 text-muted-foreground">
+                    {cashbackData.byCategory.slice(0, 3).map((entry) => (
+                      <li key={entry.category} className="flex justify-between">
+                        <span>{entry.category}</span>
+                        <span>
+                          {currencyFormatter.format(entry.estRewards)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-center text-sm text-muted-foreground">
+                Link a card to start tracking rewards potential.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="md:col-span-7">
           <MerchantTable merchants={merchantRows} isLoading={merchants.isLoading} />
         </div>
 
-        <Card className="md:col-span-3 min-h-[16rem] rounded-3xl">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Linked cards</CardTitle>
-            {accountRows.length > 1 && (
-              <div className="text-xs text-muted-foreground">
-                <p className="mb-2">Select cards to filter data: {selectedCardsText}</p>
-                <div className="flex gap-2">
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
-                    onClick={handleSelectAllCards}
-                    disabled={selectedCardIds.length === accountRows.length}
-                  >
-                    Select All
-                  </Button>
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
-                    onClick={handleClearSelection}
-                    disabled={selectedCardIds.length === 0}
-                  >
-                    Clear
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardHeader>
-          <CardContent className="flex h-64 flex-col gap-3 overflow-auto px-0 pb-0">
-            {accounts.isLoading ? (
-              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Loading cards…</div>
-            ) : accountRows.length ? (
-              accountRows.map((card) => (
-                <div key={card.id} className="flex items-center gap-3 px-4 py-3">
-                  {accountRows.length > 1 && (
-                    <Checkbox
-                      checked={selectedCardIds.includes(card.id)}
-                      onCheckedChange={() => handleCardToggle(card.id)}
-                    />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-foreground">{card.nickname}</p>
-                    <p className="text-xs text-muted-foreground">{card.issuer} •••• {card.mask}</p>
-                    <p className="text-xs text-muted-foreground">{formatLastSynced(card)}</p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                No cards yet. Add your first card to get insights.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="md:col-span-12 min-h-[10rem] rounded-3xl">
+        <Card className="md:col-span-5 min-h-[10rem] rounded-3xl">
           <CardHeader>
             <CardTitle className="text-lg font-semibold">Money moments</CardTitle>
           </CardHeader>

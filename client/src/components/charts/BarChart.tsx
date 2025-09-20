@@ -1,16 +1,16 @@
 import { Bar, BarChart as RechartsBarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
-import type { MerchantRow } from "@/types/api"
+import type { MerchantBreakdownRow } from "@/types/api"
 
 export type MerchantBarChartProps = {
-  data: MerchantRow[]
+  data: MerchantBreakdownRow[]
 }
 
 export function MerchantBarChart({ data }: MerchantBarChartProps) {
   return (
     <ResponsiveContainer width="100%" height={280}>
       <RechartsBarChart data={data} barSize={28}>
-        <XAxis dataKey="name" tickLine={false} axisLine={false} tickMargin={10} />
+        <XAxis dataKey="merchant" tickLine={false} axisLine={false} tickMargin={10} />
         <YAxis tickLine={false} axisLine={false} width={40} />
         <Tooltip
           cursor={{ fill: "rgba(99, 102, 241, 0.08)", radius: 24 }}
