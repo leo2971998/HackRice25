@@ -26,15 +26,16 @@ type BestCardResult = {
     nickname: string;
     issuer: string;
     rewardRateText: string;
-    estSavingsMonthly?: number;
+    percentBack?: number;
+    estEarningsMonthly?: number;
   };
   youHaveThisCard: boolean;
   alternatives?: Array<{
     id: string;
     name: string;
     rewardRateText: string;
-    estSavingsMonthly?: number;
     percentBack?: number;
+    estSavingsMonthly?: number;
   }>;
 };
 
@@ -63,21 +64,17 @@ export function BestCardFinder({
   selectedCardIds?: string[];
   accountRows: { id: string; nickname: string; issuer: string }[];
 }) {
-  // form state
   const [merchant, setMerchant] = useState("");
   const [spend, setSpend] = useState<number>(150);
 
-  // merchants list (autocomplete)
   const [allMerchants, setAllMerchants] = useState<MerchantRow[]>([]);
   const [loadingMerchants, setLoadingMerchants] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // result + errors
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BestCardResult | null>(null);
 
-  // fetch seeded merchants once
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -88,7 +85,7 @@ export function BestCardFinder({
           params: { limit: 2000 },
         });
         if (!mounted) return;
-        setAllMerchants((res.data.items as MerchantRow[]) || []);
+        setAllMerchants(res.data.items as MerchantRow[]);
       } catch (e: any) {
         if (!mounted) return;
         setLoadError(
@@ -104,17 +101,10 @@ export function BestCardFinder({
     };
   }, []);
 
-  // unique sorted merchant names for chips
-  const merchantOptions = useMemo(() => {
-    const s = new Set<string>();
-    for (const m of allMerchants) {
-      if (m?.name) s.add(m.name);
-      if (Array.isArray(m?.aliases)) {
-        for (const a of m.aliases) if (a) s.add(a);
-      }
-    }
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [allMerchants]);
+  const merchantOptions = useMemo(
+    () => allMerchants.map((m) => m.name).filter(Boolean),
+    [allMerchants]
+  );
 
   const filteredSuggestions = useMemo(() => {
     if (!merchant) return merchantOptions.slice(0, 6);
@@ -124,13 +114,7 @@ export function BestCardFinder({
       .slice(0, 6);
   }, [merchant, merchantOptions]);
 
-  // helpers
-  const parseSpend = (val: string) => {
-    const n = Number(val.replace(/[^\d.]/g, ""));
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  const submit = async () => {
+  async function onFind() {
     const name = merchant.trim();
     if (!name) {
       setError("Enter a merchant");
@@ -151,35 +135,54 @@ export function BestCardFinder({
       const res = await api.post("/recommendations/best-card", {
         merchant: name,
         assumedMonthlySpend: spend,
-        selectedCardIds, // optional
+        selectedCardIds,
       });
 
       const data = res.data || {};
+      const bestOwned = data.bestOwned || null;
+      const alternatives = Array.isArray(data.alternatives)
+        ? data.alternatives
+        : [];
+
+      const bestOwnedPct: number =
+        typeof bestOwned?.percentBack === "number" ? bestOwned.percentBack : 0;
+
       const mapped: BestCardResult = {
         merchant: data.merchant || name,
         category: data.category,
-        bestCard: data.bestOwned
+        bestCard: bestOwned
           ? {
-              id: data.bestOwned.accountId,
-              nickname: data.bestOwned.nickname,
-              issuer: data.bestOwned.issuer,
-              rewardRateText: data.bestOwned.rewardRateText,
-              estSavingsMonthly: undefined, // highlight stays in alts
+              id: bestOwned.accountId,
+              nickname: bestOwned.nickname,
+              issuer: bestOwned.issuer,
+              rewardRateText: bestOwned.rewardRateText,
+              percentBack: bestOwnedPct,
+              estEarningsMonthly: spend * bestOwnedPct,
             }
           : {
               id: "none",
               nickname: "No owned card",
               issuer: "",
               rewardRateText: `0% ${data.category ?? ""}`.trim(),
+              percentBack: 0,
+              estEarningsMonthly: 0,
             },
-        youHaveThisCard: !!data.bestOwned,
-        alternatives: (data.alternatives || []).map((a: any) => ({
-          id: a.id,
-          name: `${a.issuer ?? ""} ${a.name ?? ""}`.trim(),
-          rewardRateText: a.rewardRateText,
-          estSavingsMonthly: a.estSavingsMonthly,
-          percentBack: a.percentBack,
-        })),
+        youHaveThisCard: Boolean(bestOwned),
+        alternatives: alternatives.map((a: any) => {
+          const altPct: number | undefined =
+            typeof a.percentBack === "number" ? a.percentBack : undefined;
+          const extra =
+            altPct !== undefined
+              ? Math.max(0, (altPct - bestOwnedPct) * spend)
+              : undefined;
+          return {
+            id: a.id,
+            name: `${a.issuer ?? ""} ${a.name ?? ""}`.trim(),
+            rewardRateText: a.rewardRateText,
+            percentBack: altPct,
+            estSavingsMonthly: extra,
+          };
+        }),
       };
 
       setResult(mapped);
@@ -190,12 +193,19 @@ export function BestCardFinder({
     } finally {
       setIsLoading(false);
     }
-  };
+  }
 
-  // Enter key submits
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") submit();
-  };
+  const leftMessage = useMemo(() => {
+    if (!result) return "";
+    const topAlt = result.alternatives?.[0];
+    const ownedPct = result.bestCard.percentBack ?? 0;
+    const altPct = topAlt?.percentBack ?? 0;
+    if (!result.youHaveThisCard)
+      return `You do not have a great card for ${result.merchant} yet.`;
+    if (altPct > ownedPct)
+      return `Another card could earn more at ${result.merchant}.`;
+    return `This is your best card for ${result.merchant}.`;
+  }, [result]);
 
   return (
     <Card className="rounded-3xl">
@@ -204,14 +214,12 @@ export function BestCardFinder({
           Best card for a merchant
         </CardTitle>
         <CardDescription>
-          Type a store and we’ll suggest the best card from your linked cards.
+          Type a store and we will suggest the best card from your linked cards.
         </CardDescription>
       </CardHeader>
 
       <CardContent className="space-y-6">
-        {/* Inputs row */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
-          {/* Merchant input + chips */}
           <div className="sm:col-span-7 space-y-2">
             <Label htmlFor="merchant">Merchant</Label>
             <Input
@@ -223,7 +231,6 @@ export function BestCardFinder({
               }
               value={merchant}
               onChange={(e) => setMerchant(e.target.value)}
-              onKeyDown={onKeyDown}
               disabled={loadingMerchants}
             />
             {loadError && (
@@ -246,26 +253,26 @@ export function BestCardFinder({
             )}
           </div>
 
-          {/* Spend input */}
           <div className="sm:col-span-3 space-y-2">
             <Label htmlFor="spend">Monthly spend estimate</Label>
             <Input
               id="spend"
-              inputMode="decimal"
-              value={String(spend)}
-              onChange={(e) => setSpend(parseSpend(e.target.value))}
+              type="number"
+              min={0}
+              step="1"
+              value={Number.isFinite(spend) ? spend : 0}
+              onChange={(e) => setSpend(Number(e.target.value))}
               placeholder="150"
             />
             <p className="text-[11px] text-muted-foreground">
-              Used to estimate monthly savings
+              Used for earnings and savings math
             </p>
           </div>
 
-          {/* Button */}
           <div className="sm:col-span-2 flex items-end">
             <Button
               className="w-full"
-              onClick={submit}
+              onClick={onFind}
               disabled={isLoading || loadingMerchants}
             >
               {isLoading ? "Finding…" : "Find best card"}
@@ -273,24 +280,22 @@ export function BestCardFinder({
           </div>
         </div>
 
-        {/* Error */}
         {error && (
           <div className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
-        {/* Empty state */}
         {!error && !isLoading && !result && (
           <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-4 text-sm text-muted-foreground">
-            Start typing a merchant. We’ll use your seeded list for suggestions.
+            Start typing a merchant. We will use your seeded list for
+            suggestions.
           </div>
         )}
 
-        {/* Results */}
         {result && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
-            {/* Best owned card */}
+            {/* Left: earnings */}
             <Card className="md:col-span-7 rounded-2xl">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
@@ -324,36 +329,27 @@ export function BestCardFinder({
                   )}
                 </div>
 
-                {typeof result.bestCard.estSavingsMonthly === "number" &&
-                result.bestCard.estSavingsMonthly > 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Est. monthly gain:{" "}
-                    <span className="font-semibold text-foreground">
-                      {usd.format(result.bestCard.estSavingsMonthly)}
-                    </span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Est. monthly gain depends on your actual spend pattern.
-                  </p>
-                )}
-
-                <p className="text-xs text-muted-foreground">
-                  {result.youHaveThisCard
-                    ? `You already have the best card for ${result.merchant}.`
-                    : `No owned card beats this for ${result.merchant}.`}
+                <p className="text-sm text-muted-foreground">
+                  Estimated monthly earnings:{" "}
+                  <span className="font-semibold text-foreground">
+                    {usd.format(
+                      Math.max(0, result.bestCard.estEarningsMonthly ?? 0)
+                    )}
+                  </span>
                 </p>
+
+                <p className="text-xs text-muted-foreground">{leftMessage}</p>
               </CardContent>
             </Card>
 
-            {/* Alternatives */}
+            {/* Right: savings */}
             <Card className="md:col-span-5 rounded-2xl">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
                   Ways to save more
                 </CardTitle>
                 <CardDescription>
-                  Alternatives and stackable tips
+                  Cards that could save you more per month
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -370,19 +366,13 @@ export function BestCardFinder({
                         <p className="text-sm text-muted-foreground">
                           {alt.rewardRateText}
                         </p>
-                        {typeof alt.estSavingsMonthly === "number" &&
-                          alt.estSavingsMonthly > 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              You could save about{" "}
-                              {usd.format(alt.estSavingsMonthly)} more per
-                              month.
-                            </p>
-                          )}
+                        <p className="text-xs text-muted-foreground">
+                          You could save about{" "}
+                          {usd.format(Math.max(0, alt.estSavingsMonthly ?? 0))}{" "}
+                          more per month.
+                        </p>
                       </div>
                     ))}
-                    <p className="text-xs text-muted-foreground">
-                      Stack with portals, targeted offers, or in-app boosts.
-                    </p>
                   </>
                 ) : (
                   <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 p-3 text-sm text-muted-foreground">
