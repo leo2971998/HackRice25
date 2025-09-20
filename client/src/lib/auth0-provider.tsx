@@ -4,7 +4,7 @@ import { Auth0Provider, useAuth0 } from "@auth0/auth0-react"
 import { useNavigate } from "react-router-dom"
 
 import { authConfig } from "@/lib/env"
-import { setTokenGetter } from "@/lib/api-client"
+import { setAccessTokenProvider } from "@/lib/api-client"
 
 function TokenBridge() {
   const { getAccessTokenSilently, isAuthenticated } = useAuth0()
@@ -15,7 +15,7 @@ function TokenBridge() {
       authorizationParams.audience = authConfig.audience
     }
 
-    setTokenGetter(async () => {
+    setAccessTokenProvider(async () => {
       if (!isAuthenticated) {
         return null
       }
@@ -23,11 +23,22 @@ function TokenBridge() {
     })
 
     return () => {
-      setTokenGetter(null)
+      setAccessTokenProvider(null)
     }
   }, [getAccessTokenSilently, isAuthenticated])
 
   return null
+}
+
+function DevAuthProvider({ children }: PropsWithChildren) {
+  useEffect(() => {
+    setAccessTokenProvider(async () => null)
+    return () => {
+      setAccessTokenProvider(null)
+    }
+  }, [])
+
+  return <>{children}</>
 }
 
 export function Auth0ProviderWithNavigate({ children }: PropsWithChildren) {
@@ -39,6 +50,10 @@ export function Auth0ProviderWithNavigate({ children }: PropsWithChildren) {
 
   if (authConfig.audience) {
     authorizationParams.audience = authConfig.audience
+  }
+
+  if (authConfig.disableAuth) {
+    return <DevAuthProvider>{children}</DevAuthProvider>
   }
 
   return (

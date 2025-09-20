@@ -10,15 +10,21 @@ import { authConfig } from "@/lib/env"
 export function WelcomePage() {
     const navigate = useNavigate()
     const location = useLocation()
-    const { loginWithRedirect, isAuthenticated } = useAuth0()
+    const auth = authConfig.disableAuth ? null : useAuth0()
+    const isAuthenticated = authConfig.disableAuth || Boolean(auth?.isAuthenticated)
+    const showSwitchAccount = Boolean(auth?.isAuthenticated)
 
     const returnTo =
         (location.state as { returnTo?: string } | null)?.returnTo ?? "/"
 
     const handleContinue = () => {
+        if (authConfig.disableAuth) {
+            navigate(returnTo)
+            return
+        }
         const authorizationParams: Record<string, string> = {}
         if (authConfig.audience) authorizationParams.audience = authConfig.audience
-        loginWithRedirect({ appState: { returnTo }, authorizationParams })
+        auth?.loginWithRedirect({ appState: { returnTo }, authorizationParams })
     }
 
     return (
@@ -54,7 +60,7 @@ export function WelcomePage() {
                         </Button>
                     )}
 
-                    {isAuthenticated ? (
+                    {showSwitchAccount ? (
                         <Button
                             variant="outline"
                             size="lg"

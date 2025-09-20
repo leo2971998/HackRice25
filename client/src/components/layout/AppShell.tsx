@@ -7,14 +7,23 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "./ThemeToggle"
 import { useMe } from "@/hooks/useApi"
+import { authConfig } from "@/lib/env"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth0()
+  const auth = authConfig.disableAuth ? null : useAuth0()
   const { data: me } = useMe()
 
+  const user = auth?.user
   const displayName = me?.name?.trim() || user?.name || (me?.email ? me.email.split("@")[0] : "Swipe Coach member")
-  const displayEmail = me?.email ?? user?.email
+  const displayEmail = me?.email ?? user?.email ?? (authConfig.disableAuth ? "dev@local" : undefined)
   const avatarUrl = user?.picture
+
+  const handleLogout = () => {
+    if (!auth || !auth.logout) {
+      return
+    }
+    auth.logout({ logoutParams: { returnTo: window.location.origin } })
+  }
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-primary/5 via-background to-background">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur">
@@ -47,19 +56,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="hidden items-center gap-2 sm:flex"
-              onClick={() =>
-                logout({
-                  logoutParams: { returnTo: window.location.origin },
-                })
-              }
-            >
-              <LogOut className="h-4 w-4" />
-              Log out
-            </Button>
+            {!authConfig.disableAuth ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="hidden items-center gap-2 sm:flex"
+                onClick={handleLogout}
+              >
+                <LogOut className="h-4 w-4" />
+                Log out
+              </Button>
+            ) : null}
           </div>
         </div>
       </header>
