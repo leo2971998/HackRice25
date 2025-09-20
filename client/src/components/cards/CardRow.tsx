@@ -1,7 +1,7 @@
-import type { KeyboardEvent } from "react"
+import { KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Pencil, Trash2 } from "lucide-react"
-import type { CardRow as CardRowType } from "@/types/api" // avoid name clash with component
+import type { CardRow as CardRowType } from "@/types/api"
 
 type Props = {
     card: CardRowType
@@ -21,11 +21,16 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
 
     const title =
         card.nickname ||
-        [card.issuer, card.network].filter(Boolean).join(" ") ||
+        card.productName ||
         "Credit card"
 
-    const mask = card.mask ? `•••• ${card.mask}` : "•••• •••• •••• ••••"
+    const issuerNet = [card.issuer, card.network].filter(Boolean).join(" • ")
+    const mask = card.account_mask ? `•••• ${card.account_mask}` : undefined
     const expires = card.expires ? `Exp ${card.expires}` : undefined
+    const creditLimit = card.credit_limit != null ? `$${Number(card.credit_limit).toLocaleString()}` : undefined
+    const balance = (card as any).balance != null ? `$${Number((card as any).balance).toLocaleString()}` : undefined
+    const apr = (card as any).purchase_apr != null ? `${Number((card as any).purchase_apr).toFixed(2)}% APR` : undefined
+    const lastSynced = (card as any).lastSynced ? new Date((card as any).lastSynced).toLocaleDateString() : undefined
 
     return (
         <div
@@ -35,23 +40,33 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
             onKeyDown={handleKeyDown}
             aria-selected={isSelected}
             className={[
-                "group flex w-full items-center justify-between gap-3 rounded-2xl border",
-                "border-border/70 bg-white/60 p-3 transition hover:bg-muted/60 dark:bg-zinc-900/50",
+                "group flex w-full items-center justify-between gap-4 rounded-2xl border",
+                "border-border/70 bg-white/60 p-4 transition hover:bg-muted/60 dark:bg-zinc-900/50",
                 isSelected ? "ring-2 ring-primary/70" : "",
             ].join(" ")}
         >
             <div className="min-w-0 flex-1">
+                {/* top line: title + status */}
                 <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold">{title}</span>
+                    {issuerNet ? (
+                        <span className="truncate text-xs text-muted-foreground">• {issuerNet}</span>
+                    ) : null}
                     {card.status ? (
                         <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               {card.status}
             </span>
                     ) : null}
                 </div>
-                <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                    {mask}
-                    {expires ? <span className="ml-2">• {expires}</span> : null}
+
+                {/* details grid */}
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-3 lg:grid-cols-4">
+                    {mask ? <div className="truncate">Number: {mask}</div> : null}
+                    {expires ? <div className="truncate">{expires}</div> : null}
+                    {creditLimit ? <div className="truncate">Limit: {creditLimit}</div> : null}
+                    {balance ? <div className="truncate">Balance: {balance}</div> : null}
+                    {apr ? <div className="truncate">{apr}</div> : null}
+                    {lastSynced ? <div className="truncate">Synced: {lastSynced}</div> : null}
                 </div>
             </div>
 
@@ -70,7 +85,6 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
                         <Pencil className="h-4 w-4" />
                     </Button>
                 ) : null}
-
                 {onDelete ? (
                     <Button
                         variant="ghost"
