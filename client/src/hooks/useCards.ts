@@ -93,3 +93,24 @@ export function useDeleteCard(options?: MutationOpts<void, string>) {
     ...rest,
   })
 }
+
+type ApplicationPayload = {
+  slug: string
+  product_name: string
+  issuer: string
+}
+
+export function useApplyForCard(options?: MutationOpts<{ status: string; id: string }, ApplicationPayload>) {
+  const { onSuccess, ...rest } = options ?? {}
+  return useMutation({
+    mutationFn: (payload: ApplicationPayload) =>
+      apiFetch<{ status: string; id: string }>("/applications", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: (data, variables, onMutateResult, context) => {
+      onSuccess?.(data, variables, onMutateResult, context)
+    },
+    ...rest,
+  })
+}

@@ -17,7 +17,7 @@ import { ImportCardDialog } from "@/components/cards/ImportCardDialog"
 import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/lib/api-client"
 
-import { useCards, useCard, useDeleteCard, useCardCatalog } from "@/hooks/useCards"
+import { useCards, useCard, useDeleteCard, useCardCatalog, useApplyForCard } from "@/hooks/useCards"
 import type { CardRow, CreditCardProduct } from "@/types/api"
 
 const currency0 = new Intl.NumberFormat(undefined, {
@@ -392,6 +392,40 @@ function CatalogCard({ card }: CatalogCardProps) {
     const topRewards = rewards.slice(0, 3)
     const welcome = card.welcome_offer
     const baseCashback = card.base_cashback ?? 0
+    const { toast } = useToast()
+    const applyForCard = useApplyForCard()
+
+    const handleApply = () => {
+        const issuer = card.issuer?.trim()
+        const productName = (card.product_name ?? card.slug ?? "Card").trim()
+        const slug = (card.slug ?? card.id ?? card.product_name)?.toString().trim()
+
+        if (!slug || !productName || !issuer) {
+            toast({
+                title: "Missing card details",
+                description: "We couldn't log this card because key details are unavailable.",
+            })
+            return
+        }
+
+        applyForCard.mutate(
+            { slug, product_name: productName, issuer },
+            {
+                onSuccess: (_data, variables) => {
+                    toast({
+                        title: "Application saved",
+                        description: `We’ll track your ${variables.product_name} application.`,
+                    })
+                },
+                onError: (error) => {
+                    toast({
+                        title: "Unable to save",
+                        description: error.message,
+                    })
+                },
+            },
+        )
+    }
 
     return (
         <Card className="rounded-3xl p-0">
@@ -434,13 +468,18 @@ function CatalogCard({ card }: CatalogCardProps) {
                     </div>
                 ) : null}
 
-                {card.link_url ? (
-                    <Button asChild variant="outline" size="sm">
-                        <a href={card.link_url} target="_blank" rel="noreferrer">
-                            View card details
-                        </a>
+                <div className="flex flex-wrap gap-2">
+                    <Button onClick={handleApply} size="sm" disabled={applyForCard.isPending}>
+                        {applyForCard.isPending ? "Saving…" : "Track application"}
                     </Button>
-                ) : null}
+                    {card.link_url ? (
+                        <Button asChild variant="outline" size="sm">
+                            <a href={card.link_url} target="_blank" rel="noreferrer">
+                                View card details
+                            </a>
+                        </Button>
+                    ) : null}
+                </div>
             </CardContent>
         </Card>
     )

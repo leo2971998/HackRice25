@@ -1,6 +1,5 @@
-import { KeyboardEvent } from "react"
+import type { KeyboardEvent } from "react"
 import { Button } from "@/components/ui/button"
-import { Card as UICard } from "@/components/ui/card" // (optional, not used but handy if you want wrappers)
 import { Pencil, Trash2 } from "lucide-react"
 import type { CardRow as CardRowType } from "@/types/api" // avoid name clash with component
 
@@ -22,11 +21,10 @@ export default function CardRow({ card, isSelected = false, onSelect, onEdit, on
 
     const title =
         card.nickname ||
-        card.productName ||
         [card.issuer, card.network].filter(Boolean).join(" ") ||
         "Credit card"
 
-    const mask = card.account_mask ? `•••• ${card.account_mask}` : "•••• •••• •••• ••••"
+    const mask = card.mask ? `•••• ${card.mask}` : "•••• •••• •••• ••••"
     const expires = card.expires ? `Exp ${card.expires}` : undefined
 
     return (
