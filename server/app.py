@@ -345,22 +345,46 @@ def create_app() -> Flask:
         MONGO_DB=database,
         DISABLE_AUTH=disable_auth,
     )
-
     MCC_TO_CATEGORY = {
         "5411": "Groceries",
         "5499": "Groceries",
         "5812": "Food and Drink",
         "5814": "Food and Drink",
+        }
+
+    CATEGORY_ALIAS = {
+        "dining": "Food and Drink",
+        "restaurant": "Food and Drink",
+        "restaurants": "Food and Drink",
+        "grocery": "Groceries",
+        "groceries": "Groceries",
+        "travel": "Travel",
+        "pharmacy": "Drugstores",
+        "drugstore": "Drugstores",
+        "entertainment": "Entertainment",
+        "streaming": "Streaming",
+        "transit": "Transportation",
     }
 
     def normalize_merchant_category(doc: Dict[str, Any]) -> str:
+        # 1. Check explicit override
         ov = (doc.get("overrides") or {})
         if isinstance(ov, dict) and ov.get("treatAs"):
-            return str(ov["treatAs"])
+            raw = str(ov["treatAs"]).strip().lower()
+            return CATEGORY_ALIAS.get(raw, doc["overrides"]["treatAs"])
+
+        # 2. Check primaryCategory
         if doc.get("primaryCategory"):
-            return str(doc["primaryCategory"])
+            raw = str(doc["primaryCategory"]).strip().lower()
+            return CATEGORY_ALIAS.get(raw, doc["primaryCategory"])
+
+        # 3. Check MCC mapping
         mcc = str(doc.get("mcc") or "")
-        return MCC_TO_CATEGORY.get(mcc, "Other")
+        if mcc in MCC_TO_CATEGORY:
+            return MCC_TO_CATEGORY[mcc]
+
+        return "Other"
+
     
     def earn_percent_for_product(product: Dict[str, Any], category: str, monthly_spend: float) -> float:
         base = float(product.get("base_cashback", 0.0) or 0.0)

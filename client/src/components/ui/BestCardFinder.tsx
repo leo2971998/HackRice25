@@ -88,7 +88,7 @@ export function BestCardFinder({
           params: { limit: 2000 },
         });
         if (!mounted) return;
-        setAllMerchants(res.data.items as MerchantRow[]);
+        setAllMerchants((res.data.items as MerchantRow[]) || []);
       } catch (e: any) {
         if (!mounted) return;
         setLoadError(
@@ -104,10 +104,17 @@ export function BestCardFinder({
     };
   }, []);
 
-  const merchantOptions = useMemo(
-    () => allMerchants.map((m) => m.name).filter(Boolean),
-    [allMerchants]
-  );
+  // unique sorted merchant names for chips
+  const merchantOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of allMerchants) {
+      if (m?.name) s.add(m.name);
+      if (Array.isArray(m?.aliases)) {
+        for (const a of m.aliases) if (a) s.add(a);
+      }
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [allMerchants]);
 
   const filteredSuggestions = useMemo(() => {
     if (!merchant) return merchantOptions.slice(0, 6);
@@ -117,8 +124,13 @@ export function BestCardFinder({
       .slice(0, 6);
   }, [merchant, merchantOptions]);
 
-  // call backend
-  async function onFind() {
+  // helpers
+  const parseSpend = (val: string) => {
+    const n = Number(val.replace(/[^\d.]/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const submit = async () => {
     const name = merchant.trim();
     if (!name) {
       setError("Enter a merchant");
@@ -136,25 +148,23 @@ export function BestCardFinder({
     setResult(null);
 
     try {
-      // POST is cleaner since we may send arrays later
       const res = await api.post("/recommendations/best-card", {
         merchant: name,
         assumedMonthlySpend: spend,
         selectedCardIds, // optional
       });
 
-      const data = res.data;
-      // map backend -> UI shape
+      const data = res.data || {};
       const mapped: BestCardResult = {
-        merchant: data.merchant,
+        merchant: data.merchant || name,
         category: data.category,
         bestCard: data.bestOwned
           ? {
               id: data.bestOwned.accountId,
               nickname: data.bestOwned.nickname,
               issuer: data.bestOwned.issuer,
-              rewardRateText: data.bestOwned.rewardRateText, // e.g. "3% Food and Drink"
-              estSavingsMonthly: data.alternatives?.[0]?.estSavingsMonthly, // simple highlight
+              rewardRateText: data.bestOwned.rewardRateText,
+              estSavingsMonthly: undefined, // highlight stays in alts
             }
           : {
               id: "none",
@@ -180,7 +190,12 @@ export function BestCardFinder({
     } finally {
       setIsLoading(false);
     }
-  }
+  };
+
+  // Enter key submits
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") submit();
+  };
 
   return (
     <Card className="rounded-3xl">
@@ -208,6 +223,7 @@ export function BestCardFinder({
               }
               value={merchant}
               onChange={(e) => setMerchant(e.target.value)}
+              onKeyDown={onKeyDown}
               disabled={loadingMerchants}
             />
             {loadError && (
@@ -235,11 +251,9 @@ export function BestCardFinder({
             <Label htmlFor="spend">Monthly spend estimate</Label>
             <Input
               id="spend"
-              type="number"
-              min={0}
-              step="1"
-              value={Number.isFinite(spend) ? spend : 0}
-              onChange={(e) => setSpend(Number(e.target.value))}
+              inputMode="decimal"
+              value={String(spend)}
+              onChange={(e) => setSpend(parseSpend(e.target.value))}
               placeholder="150"
             />
             <p className="text-[11px] text-muted-foreground">
@@ -251,7 +265,7 @@ export function BestCardFinder({
           <div className="sm:col-span-2 flex items-end">
             <Button
               className="w-full"
-              onClick={onFind}
+              onClick={submit}
               disabled={isLoading || loadingMerchants}
             >
               {isLoading ? "Finding…" : "Find best card"}
