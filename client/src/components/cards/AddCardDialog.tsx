@@ -45,7 +45,7 @@ export function AddCardDialog({ open, onOpenChange }: AddCardDialogProps) {
     onError: (error) => {
       toast({
         title: "Unable to add card",
-        description: error.message || "Please try again after verifying your email.",
+        description: error.message || "Please try again in a moment.",
       })
     },
   })

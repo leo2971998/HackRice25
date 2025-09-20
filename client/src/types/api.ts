@@ -11,7 +11,6 @@ export type Me = {
   email: string | null
   name?: string | null
   preferences: Preferences
-  emailVerified: boolean
 }
 
 export type SpendSummary = {

@@ -8,7 +8,6 @@ import { CardSelector } from "@/components/cards/CardSelector"
 import { CreditCardDisplay } from "@/components/cards/CreditCardDisplay"
 import { AddCardDialog } from "@/components/cards/AddCardDialog"
 import { useCards, useCard, useDeleteCard } from "@/hooks/useCards"
-import { useStatus } from "@/hooks/useApi"
 import { useToast } from "@/components/ui/use-toast"
 
 const currencyFormatter = new Intl.NumberFormat(undefined, {
@@ -19,8 +18,6 @@ const currencyFormatter = new Intl.NumberFormat(undefined, {
 
 export default function CardsPage() {
   const { toast } = useToast()
-  const { data: status } = useStatus()
-  const verified = status?.emailVerified === true
   const cardsQuery = useCards()
   const cards = cardsQuery.data ?? []
   const [selectedId, setSelectedId] = useState<string | undefined>()
@@ -67,7 +64,7 @@ export default function CardsPage() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onDelete={handleDelete}
-            onAdd={verified ? () => setDialogOpen(true) : undefined}
+            onAdd={() => setDialogOpen(true)}
             isLoading={cardsQuery.isLoading}
           />
         </div>
@@ -128,12 +125,9 @@ export default function CardsPage() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <p>Add your first card to unlock tailored coaching and spend insights.</p>
-                <Button onClick={() => setDialogOpen(true)} disabled={!verified}>
+                <Button onClick={() => setDialogOpen(true)}>
                   Link a card
                 </Button>
-                {!verified ? (
-                  <p className="text-xs">Verify your email to start adding cards.</p>
-                ) : null}
               </CardContent>
             </Card>
           )}

@@ -18,15 +18,6 @@ export function useMe(options?: QueryOpts<Me>) {
   })
 }
 
-export function useStatus(options?: QueryOpts<{ emailVerified: boolean; hasAccount: boolean }>) {
-  return useQuery({
-    queryKey: ["status"],
-    queryFn: () => apiFetch<{ emailVerified: boolean; hasAccount: boolean }>("/status"),
-    staleTime: DEFAULT_STALE_TIME,
-    ...options,
-  })
-}
-
 export function useSpendSummary(windowDays: number, options?: QueryOpts<SpendSummary>) {
   return useQuery({
     queryKey: ["spend-summary", { windowDays }],
@@ -76,20 +67,8 @@ export function useUpdateMe(options?: MutationOpts<Me, UpdateMePayload>) {
       }),
     onSuccess: (data, variables, onMutateResult, context) => {
       queryClient.setQueryData(["me"], data)
-      queryClient.invalidateQueries({ queryKey: ["status"] })
       onSuccess?.(data, variables, onMutateResult, context)
     },
-    ...rest,
-  })
-}
-
-export function useResendVerification(options?: MutationOpts<void, void>) {
-  const rest = options ?? {}
-  return useMutation({
-    mutationFn: () =>
-      apiFetch<void>("/auth/resend-verification", {
-        method: "POST",
-      }),
     ...rest,
   })
 }
