@@ -346,6 +346,24 @@ def create_app() -> Flask:
         DISABLE_AUTH=disable_auth,
     )
 
+    MCC_TO_CATEGORY = {
+        "5411": "Groceries",
+        "5499": "Groceries",
+        "5812": "Food and Drink",
+        "5814": "Food and Drink",
+    }
+
+    def normalize_merchant_category(doc: Dict[str, Any]) -> str:
+        ov = (doc.get("overrides") or {})
+        if isinstance(ov, dict) and ov.get("treatAs"):
+            return str(ov["treatAs"])
+        if doc.get("primaryCategory"):
+            return str(doc["primaryCategory"])
+        mcc = str(doc.get("mcc") or "")
+        return MCC_TO_CATEGORY.get(mcc, "Other")
+    
+    
+
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
     def parse_card_ids_query() -> Optional[List[ObjectId]]:
