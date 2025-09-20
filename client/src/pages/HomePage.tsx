@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
+import { MessageCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,6 +23,7 @@ import {
 } from "@/hooks/useApi"
 import { useCardCatalog } from "@/hooks/useCards"
 import type { CardRow } from "@/types/api"
+import { openFlowCoach } from "@/lib/flow-coach"
 
 const currencyFormatter = new Intl.NumberFormat(undefined, {
     style: "currency",
@@ -160,6 +162,27 @@ export function HomePage() {
                         <StatTile label="Transactions" value={stats.txns.toLocaleString()} />
                         <StatTile label="Active cards" value={stats.accounts.toString()} />
                     </div>
+                </CardContent>
+            </Card>
+
+            {/* Flow Coach CTA */}
+            <Card className="rounded-3xl border border-primary/40 bg-primary/5">
+                <CardHeader className="p-6 md:p-8 pb-0">
+                    <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/15 text-primary">
+                            <MessageCircle className="h-4 w-4" />
+                        </span>
+                        Flow Coach
+                    </CardTitle>
+                    <CardDescription>Approve smart actions and get proactive nudges without leaving the dashboard.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3 p-6 md:p-8 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-muted-foreground">
+                        Gemini tracks spend trends, drafts budgets, and surfaces subscriptions. Tap below to open the chat.
+                    </p>
+                    <Button size="sm" onClick={() => openFlowCoach()}>
+                        Chat with Flow Coach
+                    </Button>
                 </CardContent>
             </Card>
 
