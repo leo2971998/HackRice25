@@ -85,7 +85,7 @@ body {
   overscroll-behavior: none;
 }
 
-/* Quick responsive fixes */
+/* Quick responsive fixes
 body {
   @apply text-sm sm:text-base;
 }
@@ -101,5 +101,5 @@ img {
 }
 
 .grid {
-  @apply grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4;
-}
+  @apply grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4; */
+/* } */
