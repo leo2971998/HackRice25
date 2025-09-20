@@ -1,12 +1,16 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api"
+import { apiConfig } from "@/lib/env"
+
+const API_BASE_URL = apiConfig.baseUrl
 
 export async function apiClient<T>(endpoint: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const url = endpoint.startsWith("http") ? endpoint : `${API_BASE_URL}${endpoint}`
+  const response = await fetch(url, {
+    ...init,
     headers: {
-      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...(init?.headers ?? {}),
     },
-    ...init,
   })
 
   if (!response.ok) {

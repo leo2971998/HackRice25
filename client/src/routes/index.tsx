@@ -3,10 +3,7 @@ import { Outlet, useRoutes } from "react-router-dom"
 import { AppShell } from "@/components/layout/AppShell"
 import { WelcomePage } from "@/pages/welcome"
 import { HomePage } from "@/pages/home"
-import { SpendingPage } from "@/pages/spending"
-import { RecommendationsPage } from "@/pages/recommendations"
-import { ChatPage } from "@/pages/chat"
-import { SettingsPage } from "@/pages/settings"
+import { ProtectedRoute } from "@/routes/ProtectedRoute"
 
 function AppLayout() {
   return (
@@ -29,13 +26,13 @@ const routes = [
   },
   {
     path: "/",
-    element: <AppLayout />,
+    element: (
+      <ProtectedRoute>
+        <AppLayout />
+      </ProtectedRoute>
+    ),
     children: [
       { index: true, element: <HomePage /> },
-      { path: "spending", element: <SpendingPage /> },
-      { path: "recommendations", element: <RecommendationsPage /> },
-      { path: "chat", element: <ChatPage /> },
-      { path: "settings", element: <SettingsPage /> },
     ],
   },
 ]

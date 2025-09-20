@@ -7,6 +7,7 @@ import App from "./App"
 import { queryClient } from "@/lib/queryClient"
 import { ThemeProvider } from "@/lib/theme"
 import { Toaster } from "@/components/ui/toaster"
+import { Auth0ProviderWithNavigate } from "@/lib/auth0-provider"
 import "./index.css"
 
 const container = document.getElementById("root")
@@ -17,13 +18,15 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <BrowserRouter>
-          <App />
-          <Toaster />
-        </BrowserRouter>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <BrowserRouter>
+      <Auth0ProviderWithNavigate>
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider>
+            <App />
+            <Toaster />
+          </ThemeProvider>
+        </QueryClientProvider>
+      </Auth0ProviderWithNavigate>
+    </BrowserRouter>
   </StrictMode>
 )
