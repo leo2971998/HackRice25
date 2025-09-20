@@ -1,8 +1,34 @@
+import { useEffect } from "react"
 import type { PropsWithChildren } from "react"
-import { Auth0Provider } from "@auth0/auth0-react"
+import { Auth0Provider, useAuth0 } from "@auth0/auth0-react"
 import { useNavigate } from "react-router-dom"
 
 import { authConfig } from "@/lib/env"
+import { setTokenGetter } from "@/lib/api-client"
+
+function TokenBridge() {
+  const { getAccessTokenSilently, isAuthenticated } = useAuth0()
+
+  useEffect(() => {
+    const authorizationParams: Record<string, string> = {}
+    if (authConfig.audience) {
+      authorizationParams.audience = authConfig.audience
+    }
+
+    setTokenGetter(async () => {
+      if (!isAuthenticated) {
+        return null
+      }
+      return getAccessTokenSilently({ authorizationParams })
+    })
+
+    return () => {
+      setTokenGetter(null)
+    }
+  }, [getAccessTokenSilently, isAuthenticated])
+
+  return null
+}
 
 export function Auth0ProviderWithNavigate({ children }: PropsWithChildren) {
   const navigate = useNavigate()
@@ -27,6 +53,7 @@ export function Auth0ProviderWithNavigate({ children }: PropsWithChildren) {
       cacheLocation="localstorage"
       useRefreshTokens
     >
+      <TokenBridge />
       {children}
     </Auth0Provider>
   )
