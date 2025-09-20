@@ -362,7 +362,35 @@ def create_app() -> Flask:
         mcc = str(doc.get("mcc") or "")
         return MCC_TO_CATEGORY.get(mcc, "Other")
     
+    def earn_percent_for_product(product: Dict[str, Any], category: str, monthly_spend: float) -> float:
+        base = float(product.get("base_cashback", 0.0) or 0.0)
+        rules = product.get("rewards") or []
+        rule = next((r for r in rules if r.get("category") == category), None)
+        if not rule:
+            return base
+
+        rate = float(rule.get("rate", base) or base)  # percent back as decimal, example 0.04
+        cap = rule.get("cap_monthly")
+        if not cap:
+            return rate
+
+        try:
+            cap_val = float(cap)
+        except Exception:
+            return rate
+
+        spend = float(monthly_spend or 0)
+        if spend <= 0:
+            return rate
+        if spend <= cap_val:
+            return rate
+
+        # blended percent if over cap
+        return (cap_val * rate + (spend - cap_val) * base) / spend
+
+
     
+
 
     api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -1186,6 +1214,98 @@ def create_app() -> Flask:
         ]
         rows = list(database["accounts"].aggregate(pipeline))
         return jsonify(rows)
+    
+    @api_bp.post("/recommendations/best-card")
+    def best_card_for_merchant():
+        """
+        Input: { "merchant": "DoorDash", "assumedMonthlySpend": 150, "selectedCardIds": [] }
+        Output: best owned card and up to 3 alternative products
+        """
+        user = g.current_user
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("merchant") or "").strip()
+        spend = float(data.get("assumedMonthlySpend") or 150)
+
+        if not name:
+            raise BadRequest("merchant is required")
+
+        # 1) find merchant by name or alias
+        m = database["merchants"].find_one({
+            "$or": [
+                {"name": name},
+                {"aliases": name},
+                {"slug": name.lower()}
+            ]
+        })
+        if not m:
+            raise NotFound("Merchant not found")
+
+        # 2) normalize to a category
+        category = normalize_merchant_category(m)
+
+        # 3) get user cards with product details
+        pipeline = [
+            {"$match": {"userId": user["_id"], "account_type": "credit_card"}},
+            {
+                "$lookup": {
+                    "from": "credit_cards",
+                    "localField": "card_product_id",
+                    "foreignField": "slug",
+                    "as": "product",
+                }
+            },
+            {"$unwind": "$product"},
+        ]
+        # optional filter only selected cards
+        sel_ids = data.get("selectedCardIds")
+        if isinstance(sel_ids, list) and sel_ids:
+            try:
+                obj_ids = [ObjectId(x) for x in sel_ids]
+                pipeline.insert(0, {"$match": {"_id": {"$in": obj_ids}}})
+            except Exception:
+                pass
+
+        owned_rows = list(database["accounts"].aggregate(pipeline))
+
+        # 4) score owned cards
+        owned_results = []
+        for row in owned_rows:
+            prod = row["product"]
+            pct = earn_percent_for_product(prod, category, spend)
+            owned_results.append({
+                "accountId": str(row["_id"]),
+                "nickname": row.get("nickname") or prod.get("product_name"),
+                "issuer": row.get("issuer") or prod.get("issuer"),
+                "rewardRateText": f"{int(round(pct*100))}% {category}",
+                "percentBack": pct,
+            })
+        best_owned = max(owned_results, key=lambda x: x["percentBack"]) if owned_results else None
+
+        # 5) find alternatives not owned
+        owned_slugs = {row["product"]["slug"] for row in owned_rows}
+        alternatives = []
+        for prod in database["credit_cards"].find({"active": True, "slug": {"$nin": list(owned_slugs)}}):
+            pct = earn_percent_for_product(prod, category, spend)
+            alternatives.append({
+                "id": prod.get("slug"),
+                "name": prod.get("product_name"),
+                "issuer": prod.get("issuer"),
+                "rewardRateText": f"{int(round(pct*100))}% {category}",
+                "percentBack": pct,
+                "estSavingsMonthly": round(max(pct - (best_owned["percentBack"] if best_owned else 0)) * spend, 2) if spend else None,
+            })
+        alternatives.sort(key=lambda x: x["percentBack"], reverse=True)
+        alternatives = alternatives[:3]
+
+        return jsonify({
+            "merchant": m.get("name"),
+            "category": category,
+            "assumedMonthlySpend": spend,
+            "bestOwned": best_owned,
+            "youHaveThisCard": bool(best_owned),
+            "alternatives": alternatives
+        })
+
 
     app.register_blueprint(api_bp)
 
