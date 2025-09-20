@@ -1,3 +1,5 @@
+import { type ReactNode } from "react"
+
 import CardRow from "@/components/cards/CardRow"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +14,7 @@ type Props = {
     onAdd?: () => void
     isLoading?: boolean
     heightClass?: string
+    headerActions?: ReactNode
 }
 
 export function CardSelector({
@@ -23,17 +26,21 @@ export function CardSelector({
                                  onAdd,
                                  isLoading,
                                  heightClass = "max-h-[760px]", // bumped taller default
+                                 headerActions,
                              }: Props) {
     return (
         <Card className="rounded-3xl">
             <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-2">
                     <CardTitle className="text-lg font-semibold">Your cards</CardTitle>
-                    {onAdd ? (
-                        <Button size="sm" onClick={onAdd}>
-                            Add card
-                        </Button>
-                    ) : null}
+                    <div className="flex items-center gap-2">
+                        {headerActions}
+                        {onAdd ? (
+                            <Button size="sm" onClick={onAdd}>
+                                Add card
+                            </Button>
+                        ) : null}
+                    </div>
                 </div>
             </CardHeader>
             <CardContent className="flex h-full flex-col gap-3">

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type UseQueryOptions } from "@tanstack/react-query"
 
 import { apiFetch } from "@/lib/api-client"
-import type { CardDetails, CardRow, CreditCardProduct } from "@/types/api"
+import type { CardDetails, CardRow, CreditCardProduct, RewardsEstimate } from "@/types/api"
 
 type QueryOpts<TData> = Omit<UseQueryOptions<TData, Error, TData, unknown[]>, "queryKey" | "queryFn">
 type MutationOpts<TData, TVariables> = Omit<UseMutationOptions<TData, Error, TVariables, unknown>, "mutationFn">
@@ -39,6 +39,32 @@ export function useCard(id: string | undefined, options?: QueryOpts<CardDetails 
     queryFn: () => (id ? apiFetch<CardDetails>(`/cards/${id}`) : undefined),
     enabled: Boolean(id) && (enabled ?? true),
     ...rest,
+  })
+}
+
+export function useRewardsEstimate(
+  params: { cardId?: string; cardSlug?: string; windowDays?: number } | undefined,
+  options?: QueryOpts<RewardsEstimate | undefined>,
+) {
+  const enabled = Boolean(params?.cardId || params?.cardSlug)
+  const queryKey = ["rewards", "estimate", params?.cardId ?? null, params?.cardSlug ?? null, params?.windowDays ?? null]
+
+  return useQuery({
+    queryKey,
+    enabled,
+    staleTime: 30_000,
+    queryFn: () => {
+      if (!enabled) {
+        return undefined
+      }
+      const search = new URLSearchParams()
+      if (params?.cardId) search.set("cardId", params.cardId)
+      if (params?.cardSlug) search.set("cardSlug", params.cardSlug)
+      if (params?.windowDays) search.set("window", String(params.windowDays))
+      const path = `/rewards/estimate${search.toString() ? `?${search.toString()}` : ""}`
+      return apiFetch<RewardsEstimate>(path)
+    },
+    ...options,
   })
 }
 
