@@ -2,8 +2,14 @@ import type { PropsWithChildren } from "react"
 import { Navigate, useLocation } from "react-router-dom"
 import { useAuth0 } from "@auth0/auth0-react"
 
+import { authConfig } from "@/lib/env"
+
 export function ProtectedRoute({ children }: PropsWithChildren) {
   const location = useLocation()
+  if (authConfig.disableAuth) {
+    return <>{children}</>
+  }
+
   const { isLoading, isAuthenticated } = useAuth0()
 
   if (isLoading) {

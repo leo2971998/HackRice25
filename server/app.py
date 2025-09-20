@@ -603,7 +603,8 @@ def create_app() -> Flask:
     def add_card():
         user = g.current_user
         payload = request.get_json(silent=True) or {}
-        required_fields = ["nickname", "issuer", "network", "mask", "expiry_month", "expiry_year"]
+
+        required_fields = ["issuer", "network", "mask", "expiry_month", "expiry_year"]
         mapped_payload = {
             "nickname": payload.get("nickname"),
             "issuer": payload.get("issuer"),
@@ -618,16 +619,52 @@ def create_app() -> Flask:
             value = mapped_payload.get(key if field != "mask" else "account_mask")
             if value in (None, ""):
                 raise BadRequest(f"{field} is required")
+
+        mask_raw = str(mapped_payload["account_mask"]).strip()
+        mask_digits = "".join(ch for ch in mask_raw if ch.isdigit())
+        last4 = mask_digits[-4:]
+        if len(last4) != 4 or not last4.isdigit():
+            raise BadRequest("mask (last4) must be 4 digits")
+
+        try:
+            expiry_month = int(mapped_payload["expiry_month"])
+        except (TypeError, ValueError):
+            raise BadRequest("expiry_month must be a number")
+        if expiry_month < 1 or expiry_month > 12:
+            raise BadRequest("expiry_month must be between 1 and 12")
+
+        try:
+            expiry_year = int(mapped_payload["expiry_year"])
+        except (TypeError, ValueError):
+            raise BadRequest("expiry_year must be a number")
+        current_year = datetime.utcnow().year
+        if expiry_year < current_year or expiry_year > current_year + 20:
+            raise BadRequest("expiry_year must be within a valid range")
+
+        nickname = mapped_payload["nickname"]
+        if nickname is not None:
+            if not isinstance(nickname, str):
+                raise BadRequest("nickname must be a string")
+            nickname = nickname.strip()
+            if not nickname:
+                nickname = None
+
+        card_product_id = mapped_payload.get("card_product_id")
+        if isinstance(card_product_id, str):
+            card_product_id = card_product_id.strip() or None
+        elif card_product_id is not None:
+            raise BadRequest("card_product_id must be a string")
+
         document = {
             "userId": user["_id"],
             "account_type": "credit_card",
-            "nickname": mapped_payload["nickname"],
+            "nickname": nickname,
             "issuer": mapped_payload["issuer"],
             "network": mapped_payload["network"],
-            "account_mask": str(mapped_payload["account_mask"]),
-            "expiry_month": int(mapped_payload["expiry_month"]),
-            "expiry_year": int(mapped_payload["expiry_year"]),
-            "card_product_id": mapped_payload.get("card_product_id"),
+            "account_mask": last4,
+            "expiry_month": expiry_month,
+            "expiry_year": expiry_year,
+            "card_product_id": card_product_id,
             "status": payload.get("status", "Active"),
             "last_sync": payload.get("last_sync"),
             "created_at": datetime.utcnow(),

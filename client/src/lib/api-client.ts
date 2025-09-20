@@ -2,9 +2,11 @@ import { apiConfig } from "@/lib/env"
 
 let tokenGetter: (() => Promise<string | null>) | null = null
 
-export function setTokenGetter(getter: (() => Promise<string | null>) | null) {
+export function setAccessTokenProvider(getter: (() => Promise<string | null>) | null) {
   tokenGetter = getter
 }
+
+export const setTokenGetter = setAccessTokenProvider
 
 const API_BASE_URL = apiConfig.baseUrl?.replace(/\/$/, "") ?? ""
 
@@ -19,8 +21,7 @@ function buildUrl(path: string): string {
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {})
   headers.set("Accept", "application/json")
-
-  if (init?.body && !headers.has("Content-Type")) {
+  if (!(init?.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
   }
 
@@ -34,6 +35,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   const response = await fetch(buildUrl(path), {
     ...init,
     headers,
+    credentials: init?.credentials ?? "include",
   })
 
   if (response.status === 204) {
