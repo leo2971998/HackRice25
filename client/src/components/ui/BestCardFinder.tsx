@@ -249,7 +249,12 @@ export function BestCardFinder({
             categories: Array.isArray(a.categories) ? a.categories : undefined,
             cap: a.cap || undefined,
           }))
-          .sort((A, B) => (B.percentBack ?? 0) - (A.percentBack ?? 0)),
+          .sort(
+            (
+              A: { percentBack?: number | null },
+              B: { percentBack?: number | null }
+            ) => (B.percentBack ?? 0) - (A.percentBack ?? 0)
+          ),
         matchConfidence: data.matchConfidence,
         categorySource: data.categorySource,
       };

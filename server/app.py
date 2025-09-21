@@ -40,6 +40,37 @@ DEFAULT_PREFERENCES: Dict[str, Any] = {
     "notifications": {"monthly_summary": True, "new_recommendation": True},
 }
 
+DEFAULT_CASHBACK_SCENARIOS: List[Dict[str, Any]] = [
+    {
+        "_id": "iphone-upgrade",
+        "label": "Upgrade to a new iPhone",
+        "description": "Pick up the latest smartphone for a personal splurge.",
+        "category": "Electronics",
+        "amount": 999.0,
+    },
+    {
+        "_id": "weekend-getaway",
+        "label": "Book a weekend getaway",
+        "description": "Flights and hotel for a quick escape with a friend.",
+        "category": "Travel",
+        "amount": 650.0,
+    },
+    {
+        "_id": "family-grocery-stockup",
+        "label": "Family grocery restock",
+        "description": "Weekly groceries and essentials for the household.",
+        "category": "Groceries",
+        "amount": 320.0,
+    },
+    {
+        "_id": "celebration-dinner",
+        "label": "Celebrate with a dinner out",
+        "description": "Treat the crew to a nice restaurant night.",
+        "category": "Food and Drink",
+        "amount": 180.0,
+    },
+]
+
 
 # -------------------------
 # Infra helpers
@@ -219,6 +250,26 @@ def ensure_collections(database) -> None:
             database.create_collection("mandates")
         except CollectionInvalid:
             pass
+    if "cashback_scenarios" not in existing:
+        try:
+            database.create_collection("cashback_scenarios")
+        except CollectionInvalid:
+            pass
+
+    scenarios = database["cashback_scenarios"]
+    for scenario in DEFAULT_CASHBACK_SCENARIOS:
+        scenarios.update_one(
+            {"_id": scenario["_id"]},
+            {
+                "$set": {
+                    "label": scenario["label"],
+                    "description": scenario.get("description"),
+                    "category": scenario["category"],
+                    "amount": float(scenario.get("amount", 0.0) or 0.0),
+                }
+            },
+            upsert=True,
+        )
 
 
 # -------------------------
@@ -1817,6 +1868,28 @@ def create_app() -> Flask:
                 for name, value in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
             ],
         }
+
+        scenarios: List[Dict[str, Any]] = []
+        if product:
+            for doc in database["cashback_scenarios"].find({}).sort("label", ASCENDING):
+                amount = float(doc.get("amount") or 0.0)
+                category = str(doc.get("category") or "General")
+                rate = earn_percent_for_product(product, category, amount)
+                estimated = round(amount * rate, 2)
+                scenario_id = doc.get("_id")
+                scenarios.append(
+                    {
+                        "id": str(scenario_id),
+                        "label": doc.get("label") or category,
+                        "description": doc.get("description"),
+                        "category": category,
+                        "amount": round(amount, 2),
+                        "rate": round(rate, 4),
+                        "estimatedCashback": estimated,
+                    }
+                )
+        if scenarios:
+            detail["cashbackScenarios"] = scenarios
         return jsonify(detail)
 
     @api_bp.patch("/cards/<card_id>")
