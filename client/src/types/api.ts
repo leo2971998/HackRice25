@@ -82,10 +82,21 @@ export type CardSummary = {
   byCategory: { name: string; total: number }[]
 }
 
+export type CardCashbackScenario = {
+  id: string
+  label: string
+  category: string
+  amount: number
+  estimatedCashback: number
+  rate: number
+  description?: string | null
+}
+
 export type CardDetails = CardRow & {
   productName?: string
   features?: string[]
   summary?: CardSummary
+  cashbackScenarios?: CardCashbackScenario[]
 }
 
 export type RewardsEstimateCategory = {

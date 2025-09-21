@@ -1,288 +1,232 @@
-import { useMemo } from "react"
-
-import { Button } from "@/components/ui/button"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { useRecommendations } from "@/hooks/useRecommendations"
-import type { SpendDetailCategory } from "@/types/api"
+import { Button } from "@/components/ui/button"
+import { RichMarkdown } from "@/components/markdown/RichMarkdown"
+import { useAuth0 } from "@auth0/auth0-react"
+type CategoryRow = { name: string; total: number }
+type Props = {
+    categories: CategoryRow[]
+    total: number
+    windowDays: number
+    isLoadingDetails?: boolean
+    catalogSize?: number
+}
 
-const currencyFormatter = new Intl.NumberFormat(undefined, {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-})
+/** Server response shape from /api/recommendations */
+type RecommendationResponse = {
+    mix: Record<string, number>
+    monthly_spend: number
+    windowDays: number
+    explanation?: string
+    cards: Array<{
+        slug?: string
+        product_name: string
+        issuer?: string
+        network?: string
+        annual_fee?: number
+        base_cashback?: number
+        link_url?: string
+        net?: number
+        rewards?: Array<{ category: string; rate: number; cap_monthly?: number }>
+    }>
+}
 
-const currencyFormatterWithCents = new Intl.NumberFormat(undefined, {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 2,
-})
-
-const percentFormatter = new Intl.NumberFormat(undefined, {
-  style: "percent",
-  maximumFractionDigits: 1,
-})
-
-type RecommendationsSectionProps = {
-  categories: SpendDetailCategory[]
-  total: number
-  windowDays: number
-  isLoadingDetails?: boolean
-  catalogSize?: number
+function normalizeMix(categories: CategoryRow[]): Record<string, number> {
+    const obj: Record<string, number> = {}
+    for (const c of categories) {
+        if (!c || !c.name) continue
+        const amt = Number(c.total ?? 0)
+        if (amt > 0) obj[c.name] = amt
+    }
+    return obj
 }
 
 export function RecommendationsSection({
-  categories,
-  total,
-  windowDays,
-  isLoadingDetails,
-  catalogSize,
-}: RecommendationsSectionProps) {
-  const hasSpend = total > 0 && categories.some((category) => category.amount > 0)
-  const monthlySpend = windowDays > 0 ? (total / windowDays) * 30 : total
+                                           categories,
+                                           total,
+                                           windowDays,
+                                           isLoadingDetails,
+                                           catalogSize,
+                                       }: Props) {
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const [data, setData] = useState<RecommendationResponse | null>(null)
 
-  const categoryMix = useMemo(() => {
-    if (!hasSpend) return null
-    const mix: Record<string, number> = {}
-    categories.forEach((category) => {
-      if (category.amount > 0) {
-        mix[category.key] = category.amount
-      }
-    })
-    return mix
-  }, [categories, hasSpend])
+    const { isAuthenticated, getAccessTokenSilently } = useAuth0() // ← add
+    const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") || "/api" // ← add
 
-  const recommendations = useRecommendations({
-    window: 90,
-    categoryMix,
-    monthlySpend,
-    includeExplain: true,
-    enabled: hasSpend,
-  })
-
-  if (isLoadingDetails) {
-    return (
-      <Card className="rounded-3xl p-0">
-        <CardHeader className="p-6 md:p-8 pb-0">
-          <CardTitle className="text-lg font-semibold">Card recommendations</CardTitle>
-          <CardDescription>We’re analysing your recent spending mix…</CardDescription>
-        </CardHeader>
-        <CardContent className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
-          Calculating deterministic rewards…
-        </CardContent>
-      </Card>
+    const canQuery = useMemo(
+        () => !isLoadingDetails && total > 0 && categories?.length > 0,
+        [isLoadingDetails, total, categories]
     )
-  }
 
-  if (!hasSpend) {
-    return (
-      <Card className="rounded-3xl p-0">
-        <CardHeader className="p-6 md:p-8 pb-0">
-          <CardTitle className="text-lg font-semibold">Card recommendations</CardTitle>
-          <CardDescription>
-            Add some spending data and we’ll score every card in the catalog for you.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 p-6 md:p-8 pt-4 text-sm text-muted-foreground md:text-base">
-          <p>
-            Once we know how you spend, we can show deterministic annual values, fees, and net rewards for each product. For
-            now, browse the {catalogSize ?? 0} cards in the catalog to see what’s available.
-          </p>
-        </CardContent>
-      </Card>
-    )
-  }
+    useEffect(() => {
+        let abort = false
+        async function run() {
+            if (!canQuery) { setData(null); return }
+            setLoading(true)
+            setError(null)
+            try {
+                const payload = {
+                    window: windowDays,
+                    include_explain: true,
+                    limit: 6,
+                    category_mix: normalizeMix(categories),
+                }
 
-  if (recommendations.isError) {
-    return (
-      <Card className="rounded-3xl p-0">
-        <CardHeader className="p-6 md:p-8 pb-0">
-          <CardTitle className="text-lg font-semibold">Card recommendations</CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 md:p-8 pt-4 text-sm text-muted-foreground">
-          Something went wrong while scoring the catalog. Please try again shortly.
-        </CardContent>
-      </Card>
-    )
-  }
+                const headers: Record<string, string> = { "Content-Type": "application/json" }
 
-  const data = recommendations.data
-  const cards = data?.cards ?? []
+                // Attach JWT if logged in
+                if (isAuthenticated) {
+                    const token = await getAccessTokenSilently({
+                        authorizationParams: { audience: import.meta.env.VITE_AUTH0_AUDIENCE }, // must match AUTH0_AUDIENCE on API
+                    })
+                    headers.Authorization = `Bearer ${token}`
+                }
 
-  const topCategories = categories.slice(0, 6)
+                const res = await fetch(`${API_BASE}/recommendations`, {
+                    method: "POST",
+                    headers,
+                    credentials: "include",
+                    body: JSON.stringify(payload),
+                })
+                if (!res.ok) throw new Error(`Server responded ${res.status}`)
+                const json: RecommendationResponse = await res.json()
+                if (!abort) setData(json)
+            } catch (e: any) {
+                if (!abort) setError(e?.message || "Failed to load recommendations")
+            } finally {
+                if (!abort) setLoading(false)
+            }
+        }
+        run()
+        return () => { abort = true }
+    }, [canQuery, windowDays, categories, isAuthenticated, getAccessTokenSilently, API_BASE])
 
-  return (
-    <div className="space-y-6">
-      <Card className="rounded-3xl p-0">
-        <CardHeader className="p-6 md:p-8 pb-0">
-          <CardTitle className="text-lg font-semibold">Based on your recent mix</CardTitle>
-          <CardDescription>
-            About {currencyFormatter.format(Math.round(monthlySpend))} in monthly spend across your top categories.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="p-6 md:p-8 pt-4">
-          <div className="grid gap-3">
-            {topCategories.map((category) => (
-              <div key={category.key} className="flex items-center justify-between rounded-2xl bg-muted/40 px-4 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground md:text-base">{category.key}</p>
-                  <p className="text-xs text-muted-foreground">
-                    ≈ {currencyFormatterWithCents.format(category.pct * monthlySpend)} / month
-                  </p>
+    const explanation = data?.explanation ?? ""
+    const cards = data?.cards ?? []
+
+    const Empty = (
+        <Card className="rounded-3xl">
+            <CardHeader className="p-5 pb-2">
+                <CardTitle className="text-lg font-semibold">Recommendations</CardTitle>
+                <CardDescription>
+                    Pick a card selection and generate some spend first — then we’ll tailor suggestions here.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="p-5">
+                <div className="text-sm text-muted-foreground">
+                    {isLoadingDetails ? "Crunching your recent spending…" : "No spend in this window yet."}
                 </div>
-                <span className="text-sm font-semibold text-primary md:text-base">
-                  {percentFormatter.format(Math.min(Math.max(category.pct, 0), 1))}
-                </span>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+            </CardContent>
+        </Card>
+    )
 
-      {recommendations.isLoading ? (
-        <Card className="rounded-3xl p-0">
-          <CardHeader className="p-6 md:p-8 pb-0">
-            <CardTitle className="text-lg font-semibold">Scoring cards…</CardTitle>
-            <CardDescription>Evaluating base rates, bonus categories, and fees.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">
-            Working through the catalog…
-          </CardContent>
-        </Card>
-      ) : cards.length === 0 ? (
-        <Card className="rounded-3xl p-0">
-          <CardHeader className="p-6 md:p-8 pb-0">
-            <CardTitle className="text-lg font-semibold">No clear winner yet</CardTitle>
-          </CardHeader>
-          <CardContent className="p-6 md:p-8 pt-4 text-sm text-muted-foreground md:text-base">
-            We couldn’t find a strong match with your current mix. Try linking more cards or broadening your spending history.
-          </CardContent>
-        </Card>
-      ) : (
+    if (!canQuery) return Empty
+
+    return (
         <div className="space-y-6">
-          {data?.explanation ? (
-            <Card className="rounded-3xl border border-primary/20 bg-primary/5 p-0">
-              <CardHeader className="p-6 md:p-8 pb-0">
-                <CardTitle className="text-base font-semibold text-primary">Why these picks</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 p-6 md:p-8 pt-4 text-sm text-primary md:text-base">
-                {data.explanation
-                  .split(/\n+/)
-                  .map((line) => line.trim())
-                  .filter(Boolean)
-                  .map((line, index) => (
-                    <p key={index} className="leading-relaxed">
-                      {line.replace(/^[-•\s]+/, "")}
-                    </p>
-                  ))}
-              </CardContent>
+            <Card className="rounded-3xl">
+                <CardHeader className="p-5 pb-0">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <CardTitle className="text-lg font-semibold">Recommendations</CardTitle>
+                            <CardDescription>
+                                Tailored to your last {windowDays}-day spending{typeof catalogSize === "number" ? ` (catalog: ${catalogSize})` : ""}.
+                            </CardDescription>
+                        </div>
+                        {/* Attribution */}
+                        <span className="rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+              Generated by Flow Coach
+            </span>
+                    </div>
+                </CardHeader>
+                <CardContent className="p-5 space-y-5">
+                    {loading ? (
+                        <div className="text-sm text-muted-foreground">Finding the best cards for your mix…</div>
+                    ) : error ? (
+                        <div className="text-sm text-red-600 dark:text-red-400">Error: {error}</div>
+                    ) : (
+                        <>
+                            {explanation ? (
+                                <RichMarkdown className="text-sm">{explanation}</RichMarkdown>
+                            ) : (
+                                <div className="text-sm text-muted-foreground">
+                                    We’ll explain why these cards fit your spending pattern.
+                                </div>
+                            )}
+
+                            {cards.length ? (
+                                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                                    {cards.map((rec) => (
+                                        <RecommendationCard key={rec.slug ?? rec.product_name} rec={rec} />
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-sm text-muted-foreground">No recommendations available yet.</div>
+                            )}
+                        </>
+                    )}
+                </CardContent>
             </Card>
-          ) : null}
-
-          {cards.map((card, index) => (
-            <Card key={card.slug ?? card.id ?? index} className="rounded-3xl p-0">
-              <CardHeader className="p-6 md:p-8 pb-4">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="space-y-1">
-                    <CardTitle className="text-xl font-semibold text-foreground">
-                      #{index + 1} · {card.product_name ?? card.slug ?? "Card"}
-                    </CardTitle>
-                    <CardDescription>
-                      {[card.issuer, card.network].filter(Boolean).join(" • ") || "Card issuer"}
-                    </CardDescription>
-                  </div>
-                  {card.link_url ? (
-                    <Button asChild size="sm" className="self-start">
-                      <a href={card.link_url} target="_blank" rel="noreferrer">
-                        Apply now
-                      </a>
-                    </Button>
-                  ) : null}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-6 p-6 md:p-8 pt-0">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <StatBlock label="Est. annual rewards" value={currencyFormatterWithCents.format(card.annual_reward)} />
-                  <StatBlock label="Annual fee" value={currencyFormatterWithCents.format(card.annual_fee)} />
-                  <StatBlock label="Net yearly value" value={currencyFormatterWithCents.format(card.net)} highlight />
-                </div>
-
-                {card.highlights.length > 0 ? (
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold text-foreground md:text-base">Why it fits</h3>
-                    <ul className="space-y-1 text-sm text-muted-foreground md:text-base">
-                      {card.highlights.map((highlight, highlightIndex) => (
-                        <li key={highlightIndex} className="flex gap-2">
-                          <span className="text-primary">•</span>
-                          <span>{highlight}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1">
-                    <h4 className="text-sm font-semibold text-foreground md:text-base">Base everywhere</h4>
-                    <p className="text-sm text-muted-foreground md:text-base">
-                      {percentFormatter.format(card.base_cashback)} back on all spend — worth
-                      {" "}
-                      {currencyFormatterWithCents.format(card.breakdown.base.monthly_amount)} each month.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-semibold text-foreground md:text-base">Bonus categories</h4>
-                    <ul className="space-y-1 text-sm text-muted-foreground md:text-base">
-                      {card.breakdown.bonuses.length === 0 ? (
-                        <li>No additional category boosts.</li>
-                      ) : (
-                        card.breakdown.bonuses.map((bonus) => (
-                          <li key={bonus.category}>
-                            {percentFormatter.format(bonus.rate)} on {bonus.category}
-                            {bonus.cap_monthly ? ` (up to ${currencyFormatterWithCents.format(bonus.cap_monthly)} / mo)` : ""}
-                          </li>
-                        ))
-                      )}
-                    </ul>
-                  </div>
-                </div>
-
-                {card.breakdown.welcome && card.breakdown.welcome.value > 0 ? (
-                  <div className="rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground md:text-base">
-                    Intro bonus worth approximately {currencyFormatterWithCents.format(card.breakdown.welcome.value)}
-                    {card.breakdown.welcome.min_spend
-                      ? ` after ${currencyFormatterWithCents.format(card.breakdown.welcome.min_spend)} in spend`
-                      : ""}
-                    {card.breakdown.welcome.window_days
-                      ? ` within ${card.breakdown.welcome.window_days} days`
-                      : ""}
-                    .
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          ))}
         </div>
-      )}
-    </div>
-  )
+    )
 }
 
-type StatBlockProps = {
-  label: string
-  value: string
-  highlight?: boolean
-}
+/* Card UI for a single recommendation */
+function RecommendationCard({ rec }: { rec: RecommendationResponse["cards"][number] }) {
+    const monthly = typeof rec.net === "number" ? rec.net : undefined
+    const base = typeof rec.base_cashback === "number" ? rec.base_cashback : undefined
+    const bestRule = (rec.rewards ?? []).slice().sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0))[0]
 
-function StatBlock({ label, value, highlight }: StatBlockProps) {
-  return (
-    <div
-      className={`rounded-2xl border px-4 py-3 text-sm md:text-base ${
-        highlight ? "border-primary/40 bg-primary/5 text-primary" : "border-border/60 text-foreground"
-      }`}
-    >
-      <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="text-lg font-semibold md:text-xl">{value}</p>
-    </div>
-  )
-}
+    return (
+        <Card className="rounded-2xl">
+            <CardContent className="p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-xs text-muted-foreground">{rec.issuer || "—"}</div>
+                        <div className="font-semibold truncate">{rec.product_name}</div>
+                    </div>
+                    {typeof monthly === "number" && isFinite(monthly) && (
+                        <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/20 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-300">
+                            +${Math.round(monthly)}/mo
+                        </div>
+                    )}
+                </div>
 
+                <div className="flex flex-wrap items-center gap-2">
+                    {rec.slug && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide">
+              {rec.slug}
+            </span>
+                    )}
+                    {typeof base === "number" && base > 0 && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide">
+              Base {(base * 100).toFixed(0)}%
+            </span>
+                    )}
+                    {bestRule && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide">
+              {(bestRule.rate * 100).toFixed(0)}% {bestRule.category}
+            </span>
+                    )}
+                    {typeof rec.annual_fee === "number" && rec.annual_fee > 0 && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide">
+              ${rec.annual_fee} AF
+            </span>
+                    )}
+                </div>
+
+                <div className="pt-1">
+                    {rec.link_url ? (
+                        <Button asChild variant="outline" size="sm">
+                            <a href={rec.link_url} target="_blank" rel="noreferrer">Apply / Learn more</a>
+                        </Button>
+                    ) : (
+                        <div className="text-xs text-muted-foreground">No public link available.</div>
+                    )}
+                </div>
+            </CardContent>
+        </Card>
+    )
+}

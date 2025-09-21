@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
-import { DonutChart } from "@/components/charts/DonutChart"
 import { StatTile } from "@/components/cards/StatTile"
 import { CardSelector } from "@/components/cards/CardSelector"
 import { CreditCardDisplay } from "@/components/cards/CreditCardDisplay"
@@ -16,6 +15,7 @@ import { EditCardDialog } from "@/components/cards/EditCardDialog"
 import { useToast } from "@/components/ui/use-toast"
 
 import { useCards, useCard, useDeleteCard, useCardCatalog, useRewardsEstimate } from "@/hooks/useCards"
+import { gradientForIssuer } from "@/utils/brand-gradient"
 import { createMandate } from "@/lib/mandates"
 import {
     FLOW_COACH_MANDATE_RESOLVED_EVENT,
@@ -149,9 +149,7 @@ export default function CardsPage() {
     const [dialogOpen, setDialogOpen] = useState(false)
     const [editDialogOpen, setEditDialogOpen] = useState(false)
     const [editingCard, setEditingCard] = useState<CardRowType | null>(null)
-
-    const summary = cardDetails.data?.summary
-    const donutData = useMemo(() => summary?.byCategory ?? [], [summary])
+    const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null)
 
     const slugForEstimate = normalizeSlug(
         (cardDetails.data as any)?.cardProductSlug ?? (cardDetails.data as any)?.productSlug,
@@ -160,6 +158,34 @@ export default function CardsPage() {
         selectedId ? { cardId: selectedId, cardSlug: slugForEstimate ?? undefined } : undefined,
         { enabled: Boolean(selectedId) },
     )
+
+    const scenarioCount = cardDetails.data?.cashbackScenarios?.length ?? 0
+    useEffect(() => {
+        const scenarios = cardDetails.data?.cashbackScenarios ?? []
+        if (!scenarios.length) {
+            setSelectedScenarioId(null)
+            return
+        }
+        setSelectedScenarioId((current) => {
+            if (current && scenarios.some((scenario) => scenario.id === current)) {
+                return current
+            }
+            return scenarios[0].id
+        })
+    }, [cardDetails.data?.id, scenarioCount])
+
+    const scenarioList = cardDetails.data?.cashbackScenarios ?? []
+    const selectedScenario =
+        scenarioList.find((scenario) => scenario.id === selectedScenarioId) ??
+        (scenarioList.length ? scenarioList[0] : null)
+
+    const effectiveLabel = rewardsEstimate.data
+        ? `${percent1.format(rewardsEstimate.data.effectiveRate)} effective`
+        : undefined
+    const lastSyncedLabel = cardDetails.data?.lastSynced
+        ? `Synced ${new Date(cardDetails.data.lastSynced).toLocaleDateString()}`
+        : undefined
+    const cashbackCaption = [effectiveLabel, lastSyncedLabel].filter(Boolean).join(" • ") || undefined
 
     const handleDelete = (id: string) => deleteCard.mutate(id)
     const handleEdit = (id: string) => {
@@ -388,16 +414,34 @@ export default function CardsPage() {
                                         <CreditCardDisplay card={cardDetails.data} />
 
                                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                                            <StatTile label="30-day spend" value={currency2.format(summary?.spend ?? 0)} />
-                                            <StatTile label="Transactions" value={(summary?.txns ?? 0).toLocaleString()} />
                                             <StatTile
-                                                label="Status"
-                                                value={cardDetails.data.status}
-                                                caption={
-                                                    cardDetails.data.lastSynced
-                                                        ? `Synced ${new Date(cardDetails.data.lastSynced).toLocaleDateString()}`
-                                                        : undefined
+                                                label="Estimated cash-back"
+                                                value={
+                                                    selectedScenario
+                                                        ? currency2.format(selectedScenario.estimatedCashback)
+                                                        : currency2.format(0)
                                                 }
+                                                caption={
+                                                    selectedScenario
+                                                        ? `Scenario: ${selectedScenario.label}`
+                                                        : "Pick a scenario to preview rewards"
+                                                }
+                                            />
+                                            <StatTile
+                                                label="Scenario spend"
+                                                value={
+                                                    selectedScenario
+                                                        ? currency2.format(selectedScenario.amount)
+                                                        : currency2.format(0)
+                                                }
+                                                caption={
+                                                    selectedScenario ? `Category: ${selectedScenario.category}` : undefined
+                                                }
+                                            />
+                                            <StatTile
+                                                label="Base cash-back rate"
+                                                value={percent1.format(rewardsEstimate.data?.baseRate ?? 0)}
+                                                caption="Applies when no bonus category matches"
                                             />
                                             <StatTile
                                                 label={`${rewardsEstimate.data?.windowDays ?? 30}-day cash-back`}
@@ -406,25 +450,87 @@ export default function CardsPage() {
                                                         ? "…"
                                                         : currency2.format(rewardsEstimate.data?.totalCashback ?? 0)
                                                 }
-                                                caption={
-                                                    rewardsEstimate.data
-                                                        ? `${percent1.format(rewardsEstimate.data.effectiveRate)} effective`
-                                                        : undefined
-                                                }
+                                                caption={cashbackCaption}
                                             />
                                         </div>
 
                                         <Card className="rounded-3xl">
                                             <CardHeader>
-                                                <CardTitle className="text-lg font-semibold">Category breakdown</CardTitle>
-                                                <CardDescription>Last 30 days</CardDescription>
+                                                <CardTitle className="text-lg font-semibold">Cash-back scenario planner</CardTitle>
+                                                <CardDescription>
+                                                    Explore how this card rewards common purchases.
+                                                </CardDescription>
                                             </CardHeader>
-                                            <CardContent className="h-64 p-0">
-                                                <DonutChart
-                                                    data={donutData}
-                                                    isLoading={cardDetails.isLoading}
-                                                    emptyMessage="No spending yet in the last 30 days."
-                                                />
+                                            <CardContent className="space-y-4">
+                                                {scenarioList.length ? (
+                                                    <>
+                                                        <div className="overflow-x-auto overscroll-contain scroll-smooth rounded-2xl scrollbar-thin scrollbar-thumb-muted-foreground/30 hover:scrollbar-thumb-muted-foreground/50 scrollbar-track-transparent scrollbar-corner-transparent">
+                                                            <div className="flex min-w-full gap-3 p-1">
+                                                                {scenarioList.map((scenario) => {
+                                                                    const isActive = selectedScenario?.id === scenario.id
+                                                                    return (
+                                                                        <button
+                                                                            key={scenario.id}
+                                                                            type="button"
+                                                                            aria-pressed={isActive}
+                                                                            onClick={() => setSelectedScenarioId(scenario.id)}
+                                                                            className={[
+                                                                                "group flex min-w-[220px] flex-col gap-3 rounded-2xl border p-4 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2",
+                                                                                isActive
+                                                                                    ? "border-primary bg-primary/10 shadow-[0_18px_45px_-30px_rgba(59,130,246,0.9)]"
+                                                                                    : "border-border/60 bg-background/60 hover:border-primary/40",
+                                                                            ].join(" ")}
+                                                                        >
+                                                                            <div className="flex items-center justify-between gap-2">
+                                                                                <span className="text-sm font-semibold leading-tight">
+                                                                                    {scenario.label}
+                                                                                </span>
+                                                                                <Badge
+                                                                                    variant={isActive ? "default" : "secondary"}
+                                                                                    className="rounded-full px-3 py-1 text-[11px] font-medium"
+                                                                                >
+                                                                                    {scenario.category}
+                                                                                </Badge>
+                                                                            </div>
+                                                                            <p className="text-xs text-muted-foreground line-clamp-2">
+                                                                                {scenario.description ??
+                                                                                    `Spend ${currency2.format(scenario.amount)} on ${scenario.category}.`}
+                                                                            </p>
+                                                                            <div className="mt-auto flex items-end justify-between gap-3">
+                                                                                <div>
+                                                                                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                                                                        Spend
+                                                                                    </div>
+                                                                                    <div className="text-lg font-semibold">
+                                                                                        {currency2.format(scenario.amount)}
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className="text-right">
+                                                                                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                                                                        Cash-back
+                                                                                    </div>
+                                                                                    <div className="text-lg font-semibold">
+                                                                                        {currency2.format(scenario.estimatedCashback)}
+                                                                                    </div>
+                                                                                    <div className="text-[11px] text-muted-foreground">
+                                                                                        @ {percent1.format(scenario.rate)}
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        </button>
+                                                                    )
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                        {selectedScenario?.description ? (
+                                                            <p className="text-sm text-muted-foreground">{selectedScenario.description}</p>
+                                                        ) : null}
+                                                    </>
+                                                ) : (
+                                                    <p className="text-sm text-muted-foreground">
+                                                        No example purchases yet. Check back soon.
+                                                    </p>
+                                                )}
                                             </CardContent>
                                         </Card>
 
@@ -739,17 +845,13 @@ type CatalogCreditCardProps = {
     isPending?: boolean
 }
 
-function gradientFor(product: CreditCardProduct) {
-    const key = (product.issuer || product.network || "").toLowerCase()
-    if (key.includes("american")) return "from-fuchsia-500 via-purple-500 to-indigo-600"
-    if (key.includes("chase")) return "from-sky-500 via-blue-500 to-indigo-600"
-    if (key.includes("capital")) return "from-emerald-500 via-teal-500 to-cyan-600"
-    if (key.includes("citi")) return "from-pink-500 via-rose-500 to-red-600"
-    return "from-violet-500 via-purple-500 to-fuchsia-600"
-}
-
 function CatalogCreditCard({ product, applied, awaitingApproval = false, onApply, isPending = false }: CatalogCreditCardProps) {
-    const gradient = gradientFor(product)
+    const gradient = gradientForIssuer(
+        product.slug,
+        product.issuer,
+        product.network,
+        product.product_name,
+    )
     const issuer = (product.issuer ?? "").toUpperCase()
     const name = product.product_name
     const annual = formatAnnualFee(product.annual_fee)
