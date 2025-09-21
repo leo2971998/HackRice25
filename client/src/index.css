@@ -77,4 +77,42 @@
   .text-balance {
     text-wrap: balance;
   }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-track-transparent {
+    scrollbar-color: currentColor transparent;
+  }
+
+  .scrollbar-track-transparent::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+
+  .scrollbar-corner-transparent::-webkit-scrollbar-corner {
+    background-color: transparent;
+  }
+
+  .scrollbar-thumb-muted-foreground\/30 {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+
+  .scrollbar-thumb-muted-foreground\/30::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 9999px;
+  }
+
+  .hover\:scrollbar-thumb-muted-foreground\/50:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  }
+
+  .hover\:scrollbar-thumb-muted-foreground\/50:hover::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.5);
+  }
 }

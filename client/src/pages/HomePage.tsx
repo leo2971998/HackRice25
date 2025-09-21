@@ -24,6 +24,7 @@ import {
 } from "@/hooks/useApi"
 import { useCardCatalog } from "@/hooks/useCards"
 import type { CardRow } from "@/types/api"
+import { gradientForIssuer } from "@/utils/brand-gradient"
 
 /* ───────────────── formatting helpers ───────────────── */
 
@@ -70,20 +71,21 @@ function normalizeSlug(value?: string | null) {
     return t.length ? t : null
 }
 
-function gradientForKey(keyRaw: string) {
-    const key = (keyRaw || "").toLowerCase()
-    if (key.includes("american")) return "from-fuchsia-500 via-purple-500 to-indigo-600"
-    if (key.includes("chase")) return "from-sky-500 via-blue-500 to-indigo-600"
-    if (key.includes("capital")) return "from-emerald-500 via-teal-500 to-cyan-600"
-    if (key.includes("citi")) return "from-pink-500 via-rose-500 to-red-600"
-    if (key.includes("discover")) return "from-orange-500 via-amber-500 to-yellow-600"
-    if (key.includes("wells") || key.includes("bank of america")) return "from-red-500 via-rose-500 to-pink-600"
-    return "from-violet-500 via-purple-500 to-fuchsia-600"
-}
-
 function gradientForCardRow(card?: Partial<CardRow>) {
-    const key = (card?.issuer || (card as any)?.network || (card as any)?.productName || (card as any)?.nickname || "") + ""
-    return gradientForKey(key)
+    const hints: (string | null | undefined)[] = [
+        card?.cardProductId,
+        (card as any)?.card_product_id,
+        (card as any)?.cardProductSlug,
+        (card as any)?.card_product_slug,
+        (card as any)?.productSlug,
+        (card as any)?.productName,
+        card?.issuer,
+        card?.network,
+        (card as any)?.nickname,
+    ]
+    return gradientForIssuer(
+        ...hints.map((hint) => (typeof hint === "string" && hint.length ? hint : undefined)),
+    )
 }
 
 function SingleCardHero({
@@ -232,7 +234,10 @@ export function HomePage() {
     // data hooks
     const summary = useSpendSummary(DETAILS_WINDOW_DAYS, { cardIds: filterCardIds, enabled: queryEnabled })
     const spendDetails = useSpendDetails(DETAILS_WINDOW_DAYS, { cardIds: filterCardIds, enabled: queryEnabled })
-    const merchants = useMerchants({ limit: 8, windowDays: DETAILS_WINDOW_DAYS, cardIds: filterCardIds, enabled: queryEnabled })
+    const merchants = useMerchants(
+        { limit: 8, windowDays: DETAILS_WINDOW_DAYS, cardIds: filterCardIds ?? undefined },
+        { enabled: queryEnabled },
+    )
     const catalog = useCardCatalog({ active: true })
 
     // computed

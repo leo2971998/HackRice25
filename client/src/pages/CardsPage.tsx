@@ -16,6 +16,7 @@ import { EditCardDialog } from "@/components/cards/EditCardDialog"
 import { useToast } from "@/components/ui/use-toast"
 
 import { useCards, useCard, useDeleteCard, useCardCatalog, useRewardsEstimate } from "@/hooks/useCards"
+import { gradientForIssuer } from "@/utils/brand-gradient"
 import { createMandate } from "@/lib/mandates"
 import {
     FLOW_COACH_MANDATE_RESOLVED_EVENT,
@@ -739,17 +740,13 @@ type CatalogCreditCardProps = {
     isPending?: boolean
 }
 
-function gradientFor(product: CreditCardProduct) {
-    const key = (product.issuer || product.network || "").toLowerCase()
-    if (key.includes("american")) return "from-fuchsia-500 via-purple-500 to-indigo-600"
-    if (key.includes("chase")) return "from-sky-500 via-blue-500 to-indigo-600"
-    if (key.includes("capital")) return "from-emerald-500 via-teal-500 to-cyan-600"
-    if (key.includes("citi")) return "from-pink-500 via-rose-500 to-red-600"
-    return "from-violet-500 via-purple-500 to-fuchsia-600"
-}
-
 function CatalogCreditCard({ product, applied, awaitingApproval = false, onApply, isPending = false }: CatalogCreditCardProps) {
-    const gradient = gradientFor(product)
+    const gradient = gradientForIssuer(
+        product.slug,
+        product.issuer,
+        product.network,
+        product.product_name,
+    )
     const issuer = (product.issuer ?? "").toUpperCase()
     const name = product.product_name
     const annual = formatAnnualFee(product.annual_fee)
