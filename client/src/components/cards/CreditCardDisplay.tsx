@@ -6,6 +6,7 @@ import type { CardRow } from "@/types/api"
 type CreditCardDisplayProps = {
   card: CardRow
   holderName?: string | null
+  showSlug?: boolean
 }
 
 function normalizeSlug(value?: string | null) {
@@ -14,59 +15,62 @@ function normalizeSlug(value?: string | null) {
   return trimmed.length ? trimmed : null
 }
 
-export function CreditCardDisplay({ card, holderName }: CreditCardDisplayProps) {
-  const needsAttention = card.status === "Needs Attention"
-  const issuer = (card.issuer ?? "").toUpperCase()
-  const nickname = card.nickname || (card as any).productName || "Your Card"
-  const gradient = gradientForIssuer(
-    (card as any)?.cardProductId,
-    (card as any)?.cardProductSlug,
-    (card as any)?.productSlug,
-    (card as any)?.productName,
-    card.issuer,
-    card.network,
-    nickname
-  )
-  const expiryMonth = card.expires ? card.expires.split("-")[1] : undefined
-  const expiryYear = card.expires ? card.expires.slice(2, 4) : undefined
-  const slug =
-    normalizeSlug((card as any)?.cardProductSlug) ||
-    normalizeSlug((card as any)?.productSlug) ||
-    normalizeSlug((card as any)?.cardProductId) ||
-    "—"
+export function CreditCardDisplay({ card, showSlug = false }: Props) {
+    const gradient = gradientForIssuer(
+        (card as any)?.cardProductSlug,
+        (card as any)?.productSlug,
+        card.issuer,
+        (card as any)?.productName,
+        card.network,
+    )
 
-  return (
-    <div className={cn("relative overflow-hidden rounded-3xl bg-gradient-to-br p-6 text-white shadow-card", gradient)}>
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <p className="text-xs uppercase tracking-[0.3em] text-white/80">{issuer || "CARD ISSUER"}</p>
-          <h3 className="text-2xl font-semibold leading-7">{nickname}</h3>
+    const issuer = (card.issuer ?? "").toUpperCase()
+    const name = (card as any)?.productName ?? card.nickname ?? "Your Card"
+    const last4 = (card.mask ?? "").slice(-4) || "0000"
+
+    // If you kept a slug variable before, you can keep it but only render it when showSlug is true
+    const slug =
+        (typeof (card as any)?.cardProductSlug === "string" && (card as any).cardProductSlug.trim()) ||
+        (typeof (card as any)?.productSlug === "string" && (card as any).productSlug.trim()) ||
+        null
+
+    const justify = showSlug ? "justify-between" : "justify-start"
+
+    return (
+        <div className="relative overflow-hidden rounded-3xl">
+            <div className={`relative h-44 w-full rounded-3xl bg-gradient-to-br ${gradient} p-5 text-white`}>
+                <div className="pointer-events-none absolute -left-1/4 -top-1/2 h-[220%] w-[150%] rotate-12 bg-white/10 blur-2xl" />
+                <div className="relative flex h-full flex-col">
+                    <div className="flex items-center justify-between">
+                        <div className="text-[11px] font-semibold tracking-[0.18em] opacity-90">
+                            {issuer || "CARD ISSUER"}
+                        </div>
+                        {(card.status || "").length ? (
+                            <div className="rounded-full border border-white/40 bg-white/15 px-3 py-1 text-[11px] font-semibold">
+                                {card.status}
+                            </div>
+                        ) : null}
+                    </div>
+
+                    <div className="mt-1 text-xl font-semibold leading-6 line-clamp-2">{name}</div>
+
+                    <div className={`mt-auto flex items-end ${justify} text-xs`}>
+                        <div className="space-x-2 opacity-90">
+                            <span>•••• •••• •••• {last4}</span>
+                            <span className="hidden sm:inline">SWIPE COACH MEMBER</span>
+                        </div>
+
+                        {/* ↓ Hide this whole block when showSlug is false */}
+                        {showSlug && slug ? (
+                            <div className="text-right opacity-90">
+                                <div className="uppercase tracking-wide">Slug</div>
+                                <div className="font-semibold">{slug}</div>
+                            </div>
+                        ) : null}
+                    </div>
+                </div>
+            </div>
+            <div className="absolute inset-0 -z-10 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.35)]" />
         </div>
-        <Badge
-          variant={needsAttention ? "outline" : "success"}
-          className={cn(
-            "border-white/40 bg-white/20 text-white",
-            needsAttention && "bg-amber-300/40 text-amber-900"
-          )}
-        >
-          {card.status}
-        </Badge>
-      </div>
-      <div className="mt-10 space-y-3 text-sm">
-        <p className="text-white/70">•••• •••• •••• {card.mask || "0000"}</p>
-        <div className="flex items-center justify-between text-xs uppercase tracking-wide text-white/80">
-          <span>{holderName || "Swipe Coach member"}</span>
-          {expiryMonth && expiryYear ? <span>Exp {expiryMonth}/{expiryYear}</span> : null}
-        </div>
-      </div>
-      <div className="mt-6 flex items-end justify-between text-xs text-white/85">
-        <span className="tracking-[0.2em] text-white/60">CARD PRODUCT</span>
-        <div className="text-right">
-          <div className="uppercase tracking-wide text-white/70">Slug</div>
-          <div className="text-base font-semibold leading-5 text-white">{slug}</div>
-        </div>
-      </div>
-      <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-white/10 blur-3xl" />
-    </div>
-  )
+    )
 }

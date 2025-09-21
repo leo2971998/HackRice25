@@ -93,10 +93,6 @@ function SingleCardHero({
     const issuer = card.issuer ?? ""
     const name = (card as any)?.productName ?? card.nickname ?? "Your Card"
     const last4 = (card.mask ?? "").slice(-4) || "0000"
-    const slug =
-        normalizeSlug((card as any)?.productSlug) ??
-        normalizeSlug((card as any)?.cardProductSlug) ??
-        "—"
 
     // touch swipe
     const startRef = useRef<{ x: number; y: number } | null>(null)
@@ -152,14 +148,11 @@ function SingleCardHero({
 
                     <div className="mt-1 text-xl font-semibold leading-6 line-clamp-2">{name}</div>
 
-                    <div className="mt-auto flex items-end justify-between text-xs">
+                    {/* bottom line: only the masked card number now */}
+                    <div className="mt-auto flex items-end text-xs">
                         <div className="space-x-2 opacity-90">
                             <span>•••• •••• •••• {last4}</span>
                             <span className="hidden sm:inline">SWIPE COACH MEMBER</span>
-                        </div>
-                        <div className="text-right opacity-90">
-                            <div className="uppercase tracking-wide">Slug</div>
-                            <div className="font-semibold">{slug}</div>
                         </div>
                     </div>
                 </div>
@@ -168,6 +161,7 @@ function SingleCardHero({
         </div>
     )
 }
+
 
 /* Wide 30-day spend card (goes on right above donut) */
 function Rolling30WideCard({ value }: { value: number }) {
