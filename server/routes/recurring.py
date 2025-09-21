@@ -5,8 +5,8 @@ from bson import ObjectId
 from flask import Blueprint, jsonify, request, g
 from pymongo.database import Database
 
-from server.db import get_db
-from server.recurring import detect_recurring_for_user
+from db import get_db
+from recurring import detect_recurring_for_user
 
 recurring_bp = Blueprint("recurring", __name__)
 
