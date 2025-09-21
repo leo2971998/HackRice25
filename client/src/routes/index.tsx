@@ -8,6 +8,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { SetupPage } from "@/pages/SetupPage";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 import BestCardPage from "@/pages/RealTimePage";
+import SpendingPage from "@/pages/SpendingPage";
 
 function AppLayout() {
   return (
@@ -37,6 +38,7 @@ const routes = [
     ),
     children: [
       { index: true, element: <HomePage /> },
+      { path: "spending", element: <SpendingPage /> },
       { path: "cards", element: <CardsPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "best-card", element: <BestCardPage /> },

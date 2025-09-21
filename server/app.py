@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from bson import ObjectId
 from flask import Blueprint, Flask, jsonify, request, g
@@ -896,6 +896,96 @@ def create_app() -> Flask:
                     }
                     for m in breakdown["merchants"]
                 ],
+            }
+        )
+
+    @api_bp.get("/transactions")
+    def list_transactions():
+        user = g.current_user
+        window_days = parse_window_days(30)
+        card_object_ids = parse_card_ids_query()
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+
+        account_ids: Set[ObjectId] = set()
+        for txn in transactions:
+            account_id = txn.get("accountId")
+            if isinstance(account_id, ObjectId):
+                account_ids.add(account_id)
+            elif isinstance(account_id, str):
+                try:
+                    account_ids.add(ObjectId(account_id))
+                except Exception:
+                    continue
+
+        account_lookup: Dict[str, Dict[str, Any]] = {}
+        if account_ids:
+            for account in database["accounts"].find({"_id": {"$in": list(account_ids)}}):
+                account_lookup[str(account["_id"])] = account
+
+        total_spend = 0.0
+        rows: List[Dict[str, Any]] = []
+        for txn in transactions:
+            amount = float(txn.get("amount", 0) or 0)
+            total_spend += max(amount, 0.0)
+
+            when = txn.get("date")
+            if isinstance(when, datetime):
+                posted_at = when.isoformat().replace("+00:00", "Z")
+            else:
+                posted_at = str(when) if when else None
+
+            merchant_name = (
+                txn.get("merchant_name_norm")
+                or txn.get("merchant_name")
+                or txn.get("merchant_id")
+                or txn.get("description_clean")
+                or txn.get("description")
+                or "Merchant"
+            )
+
+            account_id = txn.get("accountId")
+            account_key = None
+            if isinstance(account_id, ObjectId):
+                account_key = str(account_id)
+            elif isinstance(account_id, str):
+                account_key = account_id
+
+            account_doc = account_lookup.get(account_key) if account_key else None
+            account_name = None
+            if account_doc:
+                account_name = (
+                    account_doc.get("nickname")
+                    or account_doc.get("issuer")
+                    or account_doc.get("account_mask")
+                )
+
+            rows.append(
+                {
+                    "id": str(txn.get("_id")),
+                    "date": posted_at,
+                    "merchantName": merchant_name,
+                    "merchantId": str(txn.get("merchant_id")) if txn.get("merchant_id") else None,
+                    "description": txn.get("description")
+                    or txn.get("description_clean")
+                    or merchant_name,
+                    "category": txn.get("category")
+                    or txn.get("category_l1")
+                    or txn.get("category_l2")
+                    or "Uncategorized",
+                    "amount": round(amount, 2),
+                    "accountId": account_key,
+                    "accountName": account_name,
+                    "status": txn.get("status"),
+                    "logoUrl": txn.get("logoUrl") or txn.get("merchant_logo"),
+                }
+            )
+
+        return jsonify(
+            {
+                "windowDays": window_days,
+                "total": round(total_spend, 2),
+                "transactionCount": len(rows),
+                "transactions": rows,
             }
         )
 

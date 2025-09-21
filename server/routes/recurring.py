@@ -38,20 +38,27 @@ def get_recurring_groups():
                 "as": "merchant_info",
             }
         },
-        {"$unwind": "$merchant_info"},
+        {"$unwind": {"path": "$merchant_info", "preserveNullAndEmptyArrays": True}},
         {"$sort": {"next_expected_at": 1}},
     ]
     cursor = db["recurring_groups"].aggregate(pipeline)
 
     results = []
     for doc in cursor:
+        next_expected = doc.get("next_expected_at")
+        if isinstance(next_expected, datetime):
+            next_expected_value = next_expected.isoformat().replace("+00:00", "Z")
+        else:
+            next_expected_value = str(next_expected) if next_expected else None
+
         results.append(
             {
-                "_id": str(doc["_id"]),
-                "merchant_name": doc.get("merchant_info", {}).get("canonical_name"),
+                "id": str(doc["_id"]),
+                "merchantId": str(doc.get("merchant_id")) if doc.get("merchant_id") else None,
+                "merchantName": doc.get("merchant_info", {}).get("canonical_name"),
                 "period": doc.get("period"),
-                "typical_amount": doc.get("typical_amount"),
-                "next_expected_at": doc.get("next_expected_at"),
+                "typicalAmount": doc.get("typical_amount"),
+                "nextExpectedAt": next_expected_value,
                 "confidence": doc.get("confidence"),
             }
         )
@@ -65,15 +72,37 @@ def upcoming():
 
     query = {"user_id": user_id, "expected_at": {"$gte": _now_utc()}}
     cursor = db["future_transactions"].find(query).sort("expected_at", 1)
+    docs = list(cursor)
+
+    merchant_ids = {
+        doc.get("merchant_id")
+        for doc in docs
+        if isinstance(doc.get("merchant_id"), ObjectId)
+    }
+
+    merchants: Dict[ObjectId, Dict[str, Any]] = {}
+    if merchant_ids:
+        for merchant in db["merchants"].find({"_id": {"$in": list(merchant_ids)}}):
+            merchants[merchant["_id"]] = merchant
 
     items = []
-    for doc in cursor:
+    for doc in docs:
+        expected_at = doc.get("expected_at")
+        if isinstance(expected_at, datetime):
+            expected_value = expected_at.isoformat().replace("+00:00", "Z")
+        else:
+            expected_value = str(expected_at) if expected_at else None
+
+        merchant_id = doc.get("merchant_id")
+        merchant_doc = merchants.get(merchant_id) if isinstance(merchant_id, ObjectId) else None
+
         items.append(
             {
-                "_id": str(doc["_id"]),
-                "merchant_id": str(doc["merchant_id"]),
-                "amount_predicted": doc.get("amount_predicted"),
-                "expected_at": doc.get("expected_at"),
+                "id": str(doc["_id"]),
+                "merchantId": str(merchant_id) if merchant_id else None,
+                "merchantName": merchant_doc.get("canonical_name") if merchant_doc else None,
+                "amountPredicted": doc.get("amount_predicted"),
+                "expectedAt": expected_value,
                 "confidence": doc.get("confidence"),
                 "explain": doc.get("explain"),
             }
