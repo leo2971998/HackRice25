@@ -314,6 +314,56 @@ def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, 
 
     return user_doc
 
+def build_llm_context(database, user_id: ObjectId, window_days: int = 90, card_object_ids=None) -> Dict[str, Any]:
+    """
+    Produce a small JSON packet Gemini can use.
+    Keep it < ~2–3 KB. No PII beyond first name if you want.
+    """
+    txns = load_transactions(database, user_id, window_days, card_object_ids)
+    breakdown = aggregate_spend_details(txns)
+
+    # top categories and merchants
+    top_cats = breakdown["categories"][:6]
+    top_merchants = breakdown["merchants"][:10]
+
+    # simple recurring guess: same merchant seen >= 3 times
+    rec = [m for m in top_merchants if m["count"] >= 3]
+
+    # estimate monthly spend from window
+    monthly_est = 0.0
+    if window_days > 0 and breakdown["total"] > 0:
+        monthly_est = round((breakdown["total"] / window_days) * 30, 2)
+
+    # owned cards (lightweight)
+    owned = list(database["accounts"].find(
+        {"userId": user_id, "account_type": "credit_card"},
+        {"_id": 1, "issuer": 1, "network": 1, "nickname": 1, "card_product_slug": 1}
+    ))
+    owned_cards = [{
+        "accountId": str(c["_id"]),
+        "issuer": c.get("issuer"),
+        "network": c.get("network"),
+        "nickname": c.get("nickname"),
+        "product_slug": c.get("card_product_slug"),
+    } for c in owned]
+
+    return {
+        "window_days": window_days,
+        "total_spend_window": breakdown["total"],
+        "monthly_spend_estimate": monthly_est,
+        "top_categories": [
+            {"name": c["key"], "total": c["amount"], "pct": round(c["pct"], 4), "count": c["count"]}
+            for c in top_cats
+        ],
+        "top_merchants": [
+            {"name": m["name"], "category": m["category"], "total": m["amount"], "count": m["count"]}
+            for m in top_merchants
+        ],
+        "recurring_merchants": [{"name": m["name"], "count": m["count"]} for m in rec],
+        "owned_cards": owned_cards,
+    }
+
+
 
 def parse_window_days(default: int = 30) -> int:
     raw = request.args.get("window", default)
@@ -1395,6 +1445,7 @@ def create_app() -> Flask:
             201,
         )
 
+
     @api_bp.post("/chat")
     def chat_with_finbot():
         user = g.current_user
@@ -1413,53 +1464,48 @@ def create_app() -> Flask:
                     continue
                 author = entry.get("author")
                 content = entry.get("content")
-                if author not in ("user", "assistant"):
-                    continue
-                if not isinstance(content, str) or not content.strip():
-                    continue
-                history.append(
-                    {
+                if author in ("user", "assistant") and isinstance(content, str) and content.strip():
+                    history.append({
                         "author": author,
                         "content": content.strip(),
                         "timestamp": entry.get("timestamp"),
-                    }
-                )
+                    })
 
-        window_days = 90
-        mix, total_spend, _ = compute_user_mix(database, user["_id"], window_days, None)
+        window_days = int(payload.get("window") or 90)
 
-        if total_spend > 0 and window_days > 0:
-            monthly_total = (total_spend / window_days) * 30
-        elif mix:
-            monthly_total = 1000.0
-        else:
-            monthly_total = 0.0
+        # spend mix for recs
+        mix, _total_spend, _ = compute_user_mix(database, user["_id"], window_days, None)
 
+        # compact JSON context for Gemini
+        llm_context = build_llm_context(database, user["_id"], window_days)
+
+        # optional: seed top 3 recs
         recommendations: List[Dict[str, Any]] = []
+        monthly_total = llm_context.get("monthly_spend_estimate") or (1000.0 if mix else 0.0)
         if mix and monthly_total > 0:
             catalog_cards = list(database["credit_cards"].find({"active": True}))
             if catalog_cards:
-                scored = score_catalog(
-                    catalog_cards,
-                    mix,
-                    monthly_total,
-                    window_days,
-                    limit=3,
-                )
+                scored = score_catalog(catalog_cards, mix, monthly_total, window_days, limit=3)
                 for card in scored[:3]:
-                    recommendations.append(
-                        {
-                            "product_name": card.get("product_name"),
-                            "issuer": card.get("issuer"),
-                            "net": card.get("net"),
-                            "slug": card.get("slug"),
-                        }
-                    )
+                    recommendations.append({
+                        "product_name": card.get("product_name"),
+                        "issuer": card.get("issuer"),
+                        "net": card.get("net"),
+                        "slug": card.get("slug"),
+                    })
 
-        response_text = generate_chat_response(mix, recommendations, history, message_text)
+        # call Gemini
+        response_text = generate_chat_response(
+            user_spend_mix=mix,          # <<< use the correct parameter name
+            recommendations=recommendations,
+            history=history,
+            new_message=message_text,
+            context=llm_context,
+        )
+
         timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
         return jsonify({"reply": response_text, "timestamp": timestamp})
+
 
     @api_bp.get("/rewards/estimate")
     def rewards_estimate():
