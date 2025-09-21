@@ -820,19 +820,41 @@ def create_app() -> Flask:
         # Let CORS preflight through
         if request.method == "OPTIONS":
             return ("", 204)
-        if app.config["DISABLE_AUTH"]:
-            payload = {
-                "sub": "dev|local",
-                "email": "dev@local",
-                "email_verified": True,
-                "name": "Dev User",
-            }
-            g.current_token = payload
-            g.current_user = get_or_create_user(database["users"], payload)
-            return
-        payload = decode_token(app.config["AUTH_SETTINGS"])  # real Auth0
-        g.current_token = payload
-        g.current_user = get_or_create_user(database["users"], payload)
+
+        # Require real auth in all environments unless you EXPLICITLY set DISABLE_AUTH=1
+        if app.config.get("DISABLE_AUTH", False):
+            # Fail fast so you don't accidentally ship dev mode
+            raise Unauthorized("Auth disabled. Set DISABLE_AUTH=0 (or unset) to require login.")
+
+        settings = app.config["AUTH_SETTINGS"]  # from get_auth_settings()
+
+        # Verify the access token via JWKS (real Auth0)
+        claims = decode_token(settings)
+
+        # Some Auth0 access tokens won't include email by default; try /userinfo once as a best-effort
+        if not claims.get("email"):
+            try:
+                auth_header = request.headers.get("Authorization", "")
+                token = auth_header.split()[1] if auth_header.lower().startswith("bearer ") else None
+                if token:
+                    ui = requests.get(
+                        f"https://{settings['domain']}/userinfo",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=5,
+                    )
+                    if ui.ok:
+                        profile = ui.json()
+                        claims.setdefault("email", profile.get("email"))
+                        claims.setdefault("email_verified", profile.get("email_verified"))
+                        if profile.get("name") and not claims.get("name"):
+                            claims["name"] = profile["name"]
+            except Exception:
+                # non-fatal; proceed without email
+                pass
+
+        g.current_token = claims
+        g.current_user = get_or_create_user(app.config["MONGO_DB"]["users"], claims)
+
 
     # -------- me / status --------
     @api_bp.get("/me")
