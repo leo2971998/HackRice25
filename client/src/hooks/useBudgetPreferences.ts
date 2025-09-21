@@ -1,30 +1,67 @@
-import { useMemo } from "react"
+// src/hooks/useBudgetPreferences.ts
 import { useMe, useUpdateMe } from "@/hooks/useApi"
 
-export type BudgetPrefs = {
-    enabled: boolean
-    monthly_limit: number | null
-    soft_pct: number
-    hard_pct: number
+/**
+ * Our canonical budgets shape:
+ *   {
+ *     monthlyTotal?: number | null,
+ *     byCategory?: Record<string, number>
+ *   }
+ *
+ * Older code used keys like enabled / monthly_limit / soft_pct / hard_pct.
+ * This hook normalizes everything to the new shape.
+ */
+export type BudgetsPrefs = {
+    monthlyTotal?: number | null
+    byCategory?: Record<string, number>
 }
 
-const DEFAULT: BudgetPrefs = { enabled: true, monthly_limit: null, soft_pct: 0.8, hard_pct: 1.0 }
-
 export function useBudgetPreferences() {
-    const me = useMe()
+    const { data: me } = useMe()
     const updateMe = useUpdateMe()
 
-    const prefs: BudgetPrefs = useMemo(() => {
-        const p = (me.data?.preferences as any)?.budget
-        return { ...DEFAULT, ...(p ?? {}) }
-    }, [me.data])
+    const prefs: BudgetsPrefs = me?.preferences?.budgets ?? {}
 
-    const save = (patch: Partial<BudgetPrefs>) =>
-        updateMe.mutate({ preferences: { budget: { ...prefs, ...patch } } })
+    /** Set the global monthly budget total (or null to unset). */
+    const setMonthlyTotal = (value: number | null) => {
+        updateMe.mutate({
+            preferences: {
+                budgets: {
+                    ...prefs,
+                    monthlyTotal: value,
+                },
+            },
+        })
+    }
 
-    const setLimit = (limit: number | null) => save({ monthly_limit: limit })
-    const setPct = (soft_pct: number, hard_pct: number) => save({ soft_pct, hard_pct })
-    const toggle = (enabled: boolean) => save({ enabled })
+    /** Replace (or extend) the per-category budget map. */
+    const setByCategory = (map: Record<string, number>) => {
+        updateMe.mutate({
+            preferences: {
+                budgets: {
+                    ...prefs,
+                    byCategory: { ...(prefs.byCategory ?? {}), ...map },
+                },
+            },
+        })
+    }
 
-    return { prefs, setLimit, setPct, toggle, isSaving: updateMe.isPending, isLoading: me.isLoading }
+    /** Set multiple keys in one go; only accepts the canonical keys. */
+    const patchBudgets = (patch: Partial<BudgetsPrefs>) => {
+        updateMe.mutate({
+            preferences: {
+                budgets: {
+                    ...prefs,
+                    ...patch,
+                },
+            },
+        })
+    }
+
+    return {
+        prefs,
+        setMonthlyTotal,
+        setByCategory,
+        patchBudgets,
+    }
 }

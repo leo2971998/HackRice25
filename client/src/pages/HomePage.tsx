@@ -1,3 +1,4 @@
+// src/pages/HomePage.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight, ArrowDownRight, ArrowUpRight, Minus, X, Info } from "lucide-react"
 
@@ -52,12 +53,6 @@ function formatLastSynced(card: CardRow) {
 const DETAILS_WINDOW_DAYS = 30
 
 /* ───────── helpers ───────── */
-
-function normalizeSlug(value?: string | null) {
-    if (typeof value !== "string") return null
-    const t = value.trim()
-    return t.length ? t : null
-}
 
 function gradientForCardRow(card?: Partial<CardRow>) {
     const hints: (string | null | undefined)[] = [
@@ -162,7 +157,6 @@ function SingleCardHero({
     )
 }
 
-
 /* Wide 30-day spend card (goes on right above donut) */
 function Rolling30WideCard({ value }: { value: number }) {
     return (
@@ -172,10 +166,7 @@ function Rolling30WideCard({ value }: { value: number }) {
                 <CardDescription>Last 30 days (rolling window).</CardDescription>
             </CardHeader>
             <CardContent className="p-5">
-                <div
-                    className="font-semibold leading-tight tabular-nums"
-                    style={{ fontSize: "clamp(1.75rem, 5vw, 3rem)" }}
-                >
+                <div className="font-semibold leading-tight tabular-nums" style={{ fontSize: "clamp(1.75rem, 5vw, 3rem)" }}>
                     {formatCurrencyTight(value)}
                 </div>
             </CardContent>
@@ -265,9 +256,7 @@ function BudgetProgressCard({
                 </div>
                 {hasBudget && (
                     <div className={`text-xs ${over ? "text-red-600" : "text-muted-foreground"}`}>
-                        {over
-                            ? "You're over budget for the month."
-                            : `You’ve used ${(pct * 100).toFixed(0)}% of your budget.`}
+                        {over ? "You're over budget for the month." : `You’ve used ${(pct * 100).toFixed(0)}% of your budget.`}
                     </div>
                 )}
             </CardContent>
@@ -348,11 +337,11 @@ function CategoryMomentumCard({ txs }: { txs: TxRow[] }) {
                                     <td className="p-3 text-right tabular-nums">{money.format(r.thisMonth)}</td>
                                     <td className="p-3 text-right tabular-nums">{money.format(r.lastMonth)}</td>
                                     <td className={`p-3 text-right tabular-nums ${tone}`}>
-                    <span className="inline-flex items-center gap-1 justify-end">
-                      <Icon className="h-4 w-4" />
-                        {money.format(Math.abs(r.delta))}{" "}
-                        <span className="text-xs">({Math.abs(r.deltaPct * 100).toFixed(0)}%)</span>
-                    </span>
+                      <span className="inline-flex items-center gap-1 justify-end">
+                        <Icon className="h-4 w-4" />
+                          {money.format(Math.abs(r.delta))}{" "}
+                          <span className="text-xs">({Math.abs(r.deltaPct * 100).toFixed(0)}%)</span>
+                      </span>
                                     </td>
                                 </tr>
                             )
@@ -454,7 +443,6 @@ export function HomePage() {
     }
 
     // summary bits (rolling 30d tiles + donut)
-    const stats = summary.data?.stats ?? { totalSpend: 0, txns: 0, accounts: 0 }
     const donutData = summary.data ? (summary.data.byCategory ?? []).slice(0, 6) : []
 
     // details for recommendations
@@ -470,7 +458,8 @@ export function HomePage() {
         let sum = 0
         for (const t of txs) {
             if (!t?.date) continue
-            if (inRange(t.date, from, to)) sum += Math.max(0, t.amount || 0)
+            const amt = typeof t.amount === "number" ? t.amount : Number(t.amount ?? 0)
+            if (inRange(t.date, from, to)) sum += Math.max(0, amt)
         }
         return sum
     }, [txQuery.data?.transactions])
@@ -593,11 +582,15 @@ export function HomePage() {
                                 <StatTile label="Active cards" value={summary.data ? String(summary.data.stats.accounts) : "0"} />
                             </div>
 
-                            <CategoryMomentumCard txs={(txQuery.data?.transactions ?? []).map(t => ({
-                                date: t.date,
-                                category: t.category,
-                                amount: t.amount,
-                            }))} />
+                            <CategoryMomentumCard
+                                txs={(txQuery.data?.transactions ?? [])
+                                    .filter((t) => typeof t.date === "string" && t.date.length > 0)
+                                    .map((t) => ({
+                                        date: t.date as string,
+                                        category: (t.category ?? undefined) as string | undefined,
+                                        amount: typeof t.amount === "number" ? t.amount : Number(t.amount ?? 0),
+                                    }))}
+                            />
                         </div>
 
                         {/* Right: Budget → Rolling 30d (wide) → Donut */}

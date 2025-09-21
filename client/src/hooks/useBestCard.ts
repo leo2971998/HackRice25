@@ -20,7 +20,7 @@ export function useBestCard() {
         try {
             const res = await apiFetch<{ candidates: BestCardCandidate[] }>("/cards/best", {
                 method: "POST",
-                body: params,
+                body: JSON.stringify(params),
             })
             setData(res)
         } catch (e: any) {

@@ -209,9 +209,7 @@ export default function CardsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardRowType | null>(null);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(
-    null
-  );
+  const [, setSelectedScenarioId] = useState<string | null>(null);
 
   const slugForEstimate = normalizeSlug(
     (cardDetails.data as any)?.cardProductSlug ??
@@ -225,24 +223,19 @@ export default function CardsPage() {
   );
 
   const scenarioCount = cardDetails.data?.cashbackScenarios?.length ?? 0;
-  useEffect(() => {
-    const scenarios = cardDetails.data?.cashbackScenarios ?? [];
-    if (!scenarios.length) {
-      setSelectedScenarioId(null);
-      return;
-    }
-    setSelectedScenarioId((current) => {
-      if (current && scenarios.some((scenario) => scenario.id === current)) {
-        return current;
-      }
-      return scenarios[0].id;
-    });
-  }, [cardDetails.data?.id, scenarioCount]);
+    useEffect(() => {
+        const scenarios = cardDetails.data?.cashbackScenarios ?? [];
+        if (!scenarios.length) {
+            setSelectedScenarioId(null);
+            return;
+        }
+        setSelectedScenarioId((current: string | null) =>
+            current && scenarios.some(s => s.id === current)
+                ? current
+                : (scenarios[0].id as string)
+        );
+    }, [cardDetails.data?.id, scenarioCount]);
 
-  const scenarioList = cardDetails.data?.cashbackScenarios ?? [];
-  const selectedScenario =
-    scenarioList.find((scenario) => scenario.id === selectedScenarioId) ??
-    (scenarioList.length ? scenarioList[0] : null);
 
   const effectiveLabel = rewardsEstimate.data
     ? `${percent1.format(rewardsEstimate.data.effectiveRate)} effective`

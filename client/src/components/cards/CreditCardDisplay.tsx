@@ -1,40 +1,30 @@
-import { Badge } from "@/components/ui/badge"
-import { gradientForIssuer } from "@/utils/brand-gradient"
-import { cn } from "@/lib/utils"
-import type { CardRow } from "@/types/api"
+import type { CardRow } from "@/types/api";
+import { gradientForIssuer } from "@/utils/brand-gradient";
 
 type CreditCardDisplayProps = {
-  card: CardRow
-  holderName?: string | null
-  showSlug?: boolean
-}
+    card: CardRow;
+    showSlug?: boolean;
+};
 
-function normalizeSlug(value?: string | null) {
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
-}
-
-export function CreditCardDisplay({ card, showSlug = false }: Props) {
+export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayProps) {
     const gradient = gradientForIssuer(
         (card as any)?.cardProductSlug,
         (card as any)?.productSlug,
         card.issuer,
         (card as any)?.productName,
         card.network,
-    )
+    );
 
-    const issuer = (card.issuer ?? "").toUpperCase()
-    const name = (card as any)?.productName ?? card.nickname ?? "Your Card"
-    const last4 = (card.mask ?? "").slice(-4) || "0000"
+    const issuer = (card.issuer ?? "").toUpperCase();
+    const name = (card as any)?.productName ?? card.nickname ?? "Your Card";
+    const last4 = (card.mask ?? "").slice(-4) || "0000";
 
-    // If you kept a slug variable before, you can keep it but only render it when showSlug is true
     const slug =
         (typeof (card as any)?.cardProductSlug === "string" && (card as any).cardProductSlug.trim()) ||
         (typeof (card as any)?.productSlug === "string" && (card as any).productSlug.trim()) ||
-        null
+        null;
 
-    const justify = showSlug ? "justify-between" : "justify-start"
+    const justify = showSlug ? "justify-between" : "justify-start";
 
     return (
         <div className="relative overflow-hidden rounded-3xl">
@@ -60,7 +50,6 @@ export function CreditCardDisplay({ card, showSlug = false }: Props) {
                             <span className="hidden sm:inline">SWIPE COACH MEMBER</span>
                         </div>
 
-                        {/* ↓ Hide this whole block when showSlug is false */}
                         {showSlug && slug ? (
                             <div className="text-right opacity-90">
                                 <div className="uppercase tracking-wide">Slug</div>
@@ -72,5 +61,5 @@ export function CreditCardDisplay({ card, showSlug = false }: Props) {
             </div>
             <div className="absolute inset-0 -z-10 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.35)]" />
         </div>
-    )
+    );
 }

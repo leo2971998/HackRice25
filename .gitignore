@@ -2,3 +2,7 @@
 /.vite
 /.idea
 /server/venv
+.vite/deps/_metadata.json
+.vite/deps/_metadata.json
+/.vite
+/.vite
