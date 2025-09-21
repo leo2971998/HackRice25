@@ -12,7 +12,7 @@ export const NAV_LINKS: NavLink[] = [
   { label: "Home", path: "/", icon: Home },
   { label: "Spending", path: "/spending", icon: PieChart },
   { label: "Cards", path: "/cards", icon: CreditCard },
-  { label: "Real Time", path: "/best-card", icon: Clock },
+  { label: "Smart Swipe", path: "/best-card", icon: Clock },
   { label: "Settings", path: "/settings", icon: Settings },
 ];
 

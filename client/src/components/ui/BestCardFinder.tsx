@@ -583,9 +583,7 @@ export function BestCardFinder({
       <CardHeader className="space-y-1">
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-lg font-semibold">
-              Best card for a merchant
-            </CardTitle>
+            <CardTitle className="text-lg font-semibold">Find your</CardTitle>
             <CardDescription>
               Type a store and pick your spend basis.
             </CardDescription>
@@ -714,7 +712,7 @@ export function BestCardFinder({
             <Card className="md:col-span-7 rounded-2xl">
               <CardHeader className="pb-2">
                 <CardTitle className="text-base font-semibold">
-                  Best card
+                  Best Current Card
                 </CardTitle>
                 <MetaChips result={result} />
               </CardHeader>
