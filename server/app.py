@@ -1,7 +1,8 @@
 import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-
+import random
+from datetime import datetime
 from bson import ObjectId
 from flask import Blueprint, Flask, jsonify, request, g
 from flask_cors import CORS
@@ -106,34 +107,19 @@ def month_bounds(month_str: Optional[str]) -> Tuple[datetime, datetime, str]:
         end = datetime(year, month + 1, 1)
     return start, end, f"{year:04d}-{month:02d}"
 
-
-def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
-    """
-    Sends via SMTP if configured, otherwise logs and returns False.
-    Env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
-    """
-    host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT", "587"))
-    user = os.environ.get("SMTP_USER")
-    pw = os.environ.get("SMTP_PASS")
-    from_email = os.environ.get("SMTP_FROM")
-
-    if not (host and user and pw and from_email):
-        # dev fallback: just print
-        print(f"[EMAIL-DEV] To: {to_email}\nSubj: {subject}\n\n{body}\n")
-        return False
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = from_email
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    with smtplib.SMTP(host, port) as s:
-        s.starttls()
-        s.login(user, pw)
-        s.send_message(msg)
-    return True
+def _demo_random_last4(db, user_id) -> str:
+    """Pick a 4-digit string not already used by this user's credit cards."""
+    taken = {
+        a.get("account_mask")
+        for a in db["accounts"].find({"userId": user_id, "account_type": "credit_card"}, {"account_mask": 1})
+        if isinstance(a.get("account_mask"), str) and a.get("account_mask")
+    }
+    # try a few times; worst case allow a dupe
+    for _ in range(100):
+        s = f"{random.randint(0, 9999):04d}"
+        if s not in taken:
+            return s
+    return f"{random.randint(0, 9999):04d}"
 
 
 def calc_month_spend(db, user_id: ObjectId, start: datetime, end: datetime) -> float:
@@ -1453,7 +1439,7 @@ def create_app() -> Flask:
                 }
                 database["applications"].insert_one(application_document)
 
-            account_matchers: List[Any] = []
+            account_matchers = []
             product_id = product.get("_id")
             if product_id:
                 account_matchers.append({"card_product_id": product_id})
@@ -1468,13 +1454,21 @@ def create_app() -> Flask:
                 }
             )
 
+            # Demo fake artifact fields
+            last4 = _demo_random_last4(database, user["_id"])
+            exp_month = random.randint(1, 12)
+            exp_year = datetime.utcnow().year + random.randint(3, 6)
+
             account_updates = {
                 "issuer": issuer_name,
                 "network": product.get("network"),
                 "nickname": product_name,
                 "card_product_id": product_id,
                 "card_product_slug": product.get("slug"),
-                "status": "Applied",
+                "status": "Active",              # <- demo: instantly active
+                "account_mask": last4,           # <- demo: fake last-4 for UI
+                "expiry_month": exp_month,       # <- optional demo
+                "expiry_year": exp_year,         # <- optional demo
                 "applied_at": now,
                 "updated_at": now,
             }
@@ -1482,31 +1476,43 @@ def create_app() -> Flask:
             if existing_account:
                 database["accounts"].update_one(
                     {"_id": existing_account["_id"]},
-                    {"$set": account_updates, "$setOnInsert": {"created_at": existing_account.get("created_at", now)}},
+                    {
+                        "$set": account_updates,
+                        "$setOnInsert": {"created_at": existing_account.get("created_at", now)},
+                    },
                 )
+                account_id = existing_account["_id"]
             else:
                 account_document = {
                     "userId": user["_id"],
                     "account_type": "credit_card",
-                    "issuer": issuer_name,
-                    "network": product.get("network"),
-                    "nickname": product_name,
-                    "account_mask": "",
-                    "card_product_id": product_id,
-                    "card_product_slug": product.get("slug"),
-                    "status": "Applied",
-                    "applied_at": now,
+                    **account_updates,
+                    "account_mask": last4,   # make sure it's present on insert
                     "created_at": now,
-                    "updated_at": now,
                 }
-                database["accounts"].insert_one(account_document)
+                result = database["accounts"].insert_one(account_document)
+                account_id = result.inserted_id
 
+            # Seed demo transactions so the card has activity
+            try:
+                generate_mock_transactions(
+                    database,
+                    str(user["_id"]),
+                    str(account_id),
+                    N=20,
+                    days=45,
+                    seed_version="v1",
+                )
+            except Exception as e:
+                app.logger.warning(f"mock generation failed for account {account_id}: {e}")
+
+            # Mark mandate executed
             database["mandates"].update_one(
                 {"_id": mandate["_id"]},
                 {"$set": {"status": "executed", "updated_at": now}},
             )
 
-            return jsonify({"id": mandate_id, "status": "executed", "result": "card_applied"})
+            return jsonify({"id": mandate_id, "status": "executed", "result": "card_activated"})
 
         raise BadRequest("no executor for this mandate")
 
