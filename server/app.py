@@ -12,7 +12,9 @@ from pymongo.collection import Collection
 from pymongo.errors import CollectionInvalid, DuplicateKeyError
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
-
+import smtplib
+from email.message import EmailMessage
+from calendar import monthrange
 # LLM + services
 from llm.gemini import explain_recommendations, generate_chat_response
 from services.rewards import compute_month_earnings, normalize_mix
@@ -34,13 +36,17 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 JWKS_CACHE: Dict[str, Any] = {"keys": []}
-DEFAULT_PREFERENCES: Dict[str, Any] = {
+# app.py
+DEFAULT_PREFERENCES = {
     "timezone": "America/Chicago",
     "currency": "USD",
     "theme": "system",
     "privacy": {"blurAmounts": False},
     "notifications": {"monthly_summary": True, "new_recommendation": True},
+    # NEW:
+    "budgets": {"monthlyTotal": None, "byCategory": {}},
 }
+
 
 DEFAULT_CASHBACK_SCENARIOS: List[Dict[str, Any]] = [
     {
@@ -80,6 +86,107 @@ def load_environment() -> None:
     if load_dotenv is not None:
         load_dotenv()
 
+def month_bounds(month_str: Optional[str]) -> Tuple[datetime, datetime, str]:
+    """
+    month_str 'YYYY-MM' -> (start, end, normalized_str)
+    """
+    now = datetime.utcnow()
+    if not month_str:
+        year, month = now.year, now.month
+    else:
+        try:
+            year, month = map(int, month_str.split("-", 1))
+        except Exception:
+            raise BadRequest("month must be 'YYYY-MM'")
+    start = datetime(year, month, 1)
+    # first day of next month
+    if month == 12:
+        end = datetime(year + 1, 1, 1)
+    else:
+        end = datetime(year, month + 1, 1)
+    return start, end, f"{year:04d}-{month:02d}"
+
+
+def send_email_smtp(to_email: str, subject: str, body: str) -> bool:
+    """
+    Sends via SMTP if configured, otherwise logs and returns False.
+    Env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
+    """
+    host = os.environ.get("SMTP_HOST")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER")
+    pw = os.environ.get("SMTP_PASS")
+    from_email = os.environ.get("SMTP_FROM")
+
+    if not (host and user and pw and from_email):
+        # dev fallback: just print
+        print(f"[EMAIL-DEV] To: {to_email}\nSubj: {subject}\n\n{body}\n")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    with smtplib.SMTP(host, port) as s:
+        s.starttls()
+        s.login(user, pw)
+        s.send_message(msg)
+    return True
+
+
+def calc_month_spend(db, user_id: ObjectId, start: datetime, end: datetime) -> float:
+    """
+    Sum positive amounts for the month.
+    """
+    rows = db["transactions"].find(
+        {"userId": user_id, "date": {"$gte": start, "$lt": end}},
+        {"amount": 1},
+    )
+    total = 0.0
+    for r in rows:
+        try:
+            amt = float(r.get("amount", 0) or 0)
+        except Exception:
+            amt = 0.0
+        if amt > 0:
+            total += amt
+    return round(total, 2)
+
+
+def check_and_notify_budget(db, user, month_str: str) -> Dict[str, any]:
+    start, end, mkey = month_bounds(month_str)
+    budget_doc = db["budgets"].find_one({"userId": user["_id"], "month": mkey})
+    budget = float(budget_doc.get("amount", 0) if budget_doc else 0)
+    spend = calc_month_spend(db, user["_id"], start, end)
+    over = budget > 0 and spend > budget
+
+    if over and budget_doc and not budget_doc.get("notified"):
+        subj = f"Budget alert for {mkey}"
+        body = (
+            f"Hi {user.get('name') or 'there'},\n\n"
+            f"Your spending this month has exceeded your budget.\n\n"
+            f"Budget: ${budget:,.2f}\n"
+            f"Spend:  ${spend:,.2f}\n\n"
+            f"— SwipeCoach"
+        )
+        send_email_smtp(user.get("email") or "", subj, body)
+        db["budgets"].update_one(
+            {"_id": budget_doc["_id"]},
+            {"$set": {"notified": True, "updated_at": datetime.utcnow()}},
+        )
+
+    pct = (spend / budget) if budget > 0 else 0.0
+    return {
+        "month": mkey,
+        "budget": round(budget, 2),
+        "spend": spend,
+        "remaining": round(max(0.0, budget - spend), 2) if budget > 0 else None,
+        "percent": round(pct, 4),
+        "over": over,
+        "notified": bool(budget_doc.get("notified")) if budget_doc else False,
+    }
 
 def get_auth_settings() -> Dict[str, str]:
     domain = os.environ.get("AUTH0_DOMAIN")
@@ -194,17 +301,30 @@ def ensure_collections(database) -> None:
 # -------------------------
 # User helpers
 # -------------------------
+def _deep_merge_whitelist(existing: Dict[str, Any], updates: Dict[str, Any], allowed: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deep-merge `updates` into `existing`, but only for keys present in `allowed`.
+    `allowed` is the shape (DEFAULT_PREFERENCES at the root; nested dicts at deeper levels).
+    """
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    for key, value in (updates or {}).items():
+        # alias singular -> plural
+        key_norm = "budgets" if key == "budget" else key
+
+        if key_norm not in allowed:
+            continue
+
+        allowed_sub = allowed[key_norm]
+        if isinstance(value, dict) and isinstance(allowed_sub, dict):
+            base = existing.get(key_norm, allowed_sub) if isinstance(existing, dict) else allowed_sub
+            merged[key_norm] = _deep_merge_whitelist(base, value, allowed_sub)
+        else:
+            merged[key_norm] = value
+    return merged
 
 def merge_preferences(existing: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
-    merged = {**existing}
-    for key, value in updates.items():
-        if key not in DEFAULT_PREFERENCES:
-            continue
-        if isinstance(value, dict) and isinstance(DEFAULT_PREFERENCES[key], dict):
-            merged[key] = merge_preferences(existing.get(key, DEFAULT_PREFERENCES[key]), value)
-        else:
-            merged[key] = value
-    return merged
+    # existing behavior but using the deep, shape-aware function
+    return _deep_merge_whitelist(existing or DEFAULT_PREFERENCES, updates or {}, DEFAULT_PREFERENCES)
 
 
 def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -238,16 +358,25 @@ def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, 
             user_doc = new_user
     else:
         updates: Dict[str, Any] = {}
+
         if email and user_doc.get("email") != email:
             updates["email"] = email
-        if name and user_doc.get("name") != name:
-            updates["name"] = name
+
+        # ✅ Only set name from token if the user has no name yet.
+        #    Do NOT overwrite a user-changed name.
+        token_name = payload.get("name") or (email.split("@")[0] if isinstance(email, str) and "@" in email else None)
+        if not user_doc.get("name") and token_name:
+            updates["name"] = token_name
+
         if user_doc.get("email_verified") != email_verified:
             updates["email_verified"] = email_verified
+
         if updates:
             updates["updated_at"] = datetime.utcnow()
             users.update_one({"_id": user_doc["_id"]}, {"$set": updates})
             user_doc.update(updates)
+
+        # also keep the fallback to set DEFAULT_PREFERENCES if missing
         if "preferences" not in user_doc:
             users.update_one({"_id": user_doc["_id"]}, {"$set": {"preferences": DEFAULT_PREFERENCES}})
             user_doc["preferences"] = DEFAULT_PREFERENCES
