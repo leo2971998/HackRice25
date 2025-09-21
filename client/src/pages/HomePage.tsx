@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link } from "react-router-dom"
 import { ChevronLeft, ChevronRight, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -303,16 +302,6 @@ export function HomePage() {
             <PageSection
                 title={`Welcome back, ${greeting}`}
                 description={`Here’s what’s been happening across your wallet over the last ${DETAILS_WINDOW_DAYS} days.`}
-                actions={
-                    <div className="flex flex-wrap gap-2">
-                        <Button asChild variant="secondary">
-                            <Link to="/recommendations">Explore recommendations</Link>
-                        </Button>
-                        <Button asChild>
-                            <Link to="/setup">Link a new account</Link>
-                        </Button>
-                    </div>
-                }
             />
 
             {/* Tabs always visible */}
