@@ -57,6 +57,52 @@ export type MoneyMoment = {
   type: "tip" | "win" | "alert"
 }
 
+export type TransactionRow = {
+  id: string
+  date: string | null
+  merchantName: string
+  merchantId?: string | null
+  description: string
+  category: string
+  amount: number
+  accountId?: string | null
+  accountName?: string | null
+  status?: string | null
+  logoUrl?: string | null
+}
+
+export type TransactionsResponse = {
+  windowDays: number
+  total: number
+  transactionCount: number
+  transactions: TransactionRow[]
+}
+
+export type RecurringGroup = {
+  id: string
+  merchantId?: string | null
+  merchantName?: string | null
+  period?: string | null
+  typicalAmount?: number | null
+  nextExpectedAt?: string | null
+  confidence?: number | null
+}
+
+export type UpcomingTransaction = {
+  id: string
+  merchantId?: string | null
+  merchantName?: string | null
+  amountPredicted?: number | null
+  expectedAt?: string | null
+  confidence?: number | null
+  explain?: string | null
+}
+
+export type UpcomingResponse = {
+  ok: boolean
+  upcoming: UpcomingTransaction[]
+}
+
 export type CardRow = {
   id: string
   nickname: string

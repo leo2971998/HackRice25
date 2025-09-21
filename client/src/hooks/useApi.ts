@@ -7,8 +7,11 @@ import type {
   MerchantRow,
   MoneyMoment,
   Preferences,
+  RecurringGroup,
   SpendDetails,
   SpendSummary,
+  TransactionsResponse,
+  UpcomingResponse,
 } from "@/types/api"
 
 const DEFAULT_STALE_TIME = 60_000
@@ -66,15 +69,15 @@ export function useMerchants(
   params: { limit: number; windowDays: number; cardIds?: string[] },
   options?: QueryOpts<MerchantRow[]>
 ) {
-  const query = new URLSearchParams({ 
-    limit: String(params.limit), 
-    window: String(params.windowDays) 
+  const query = new URLSearchParams({
+    limit: String(params.limit),
+    window: String(params.windowDays)
   })
-  
+
   if (params.cardIds && params.cardIds.length > 0) {
     params.cardIds.forEach(id => query.append('cardIds', id))
   }
-  
+
   return useQuery({
     queryKey: ["merchants", { limit: params.limit, windowDays: params.windowDays, cardIds: params.cardIds }],
     queryFn: () => apiFetch<MerchantRow[]>(`/merchants?${query.toString()}`),
@@ -82,8 +85,45 @@ export function useMerchants(
   })
 }
 
+export function useTransactions(
+  params: { windowDays: number; cardIds?: string[] },
+  options?: QueryOpts<TransactionsResponse>
+) {
+  const query = new URLSearchParams({ window: String(params.windowDays) })
+
+  if (params.cardIds && params.cardIds.length > 0) {
+    params.cardIds.forEach((id) => query.append("cardIds", id))
+  }
+
+  return useQuery({
+    queryKey: ["transactions", { windowDays: params.windowDays, cardIds: params.cardIds }],
+    queryFn: () => apiFetch<TransactionsResponse>(`/transactions?${query.toString()}`),
+    ...options,
+  })
+}
+
+type RecurringResponse = { ok: boolean; recurring: RecurringGroup[] }
+
+export function useRecurringGroups(options?: QueryOpts<RecurringResponse>) {
+  return useQuery({
+    queryKey: ["recurring-groups"],
+    queryFn: () => apiFetch<RecurringResponse>("/recurring"),
+    staleTime: DEFAULT_STALE_TIME,
+    ...options,
+  })
+}
+
+export function useUpcomingTransactions(options?: QueryOpts<UpcomingResponse>) {
+  return useQuery({
+    queryKey: ["upcoming-transactions"],
+    queryFn: () => apiFetch<UpcomingResponse>("/upcoming"),
+    staleTime: DEFAULT_STALE_TIME,
+    ...options,
+  })
+}
+
 export function useMoneyMoments(
-  windowDays: number, 
+  windowDays: number,
   options?: QueryOpts<MoneyMoment[]> & { cardIds?: string[] }
 ) {
   const { cardIds, ...queryOptions } = options || {}
@@ -154,6 +194,25 @@ export function useDeleteAccount(options?: MutationOpts<void, string>) {
       }),
     onSuccess: (data, variables, onMutateResult, context) => {
       queryClient.invalidateQueries({ queryKey: ["cards"] })
+      onSuccess?.(data, variables, onMutateResult, context)
+    },
+    ...rest,
+  })
+}
+
+export function useScanRecurring(
+  options?: MutationOpts<{ ok: boolean; scanned: number; results: unknown[] }, void>
+) {
+  const queryClient = useQueryClient()
+  const { onSuccess, ...rest } = options ?? {}
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ ok: boolean; scanned: number; results: unknown[] }>("/recurring/scan", {
+        method: "POST",
+      }),
+    onSuccess: (data, variables, onMutateResult, context) => {
+      queryClient.invalidateQueries({ queryKey: ["upcoming-transactions"] })
+      queryClient.invalidateQueries({ queryKey: ["recurring-groups"] })
       onSuccess?.(data, variables, onMutateResult, context)
     },
     ...rest,
