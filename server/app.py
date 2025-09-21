@@ -9,7 +9,7 @@ from jose import jwt
 from jose.exceptions import JWTError
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
-from pymongo.errors import CollectionInvalid, DuplicateKeyError, OperationFailure
+from pymongo.errors import CollectionInvalid, DuplicateKeyError
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
@@ -24,6 +24,8 @@ from services.spend import (
     load_transactions,
 )
 from mock_transactions import generate_mock_transactions
+from server.db import ensure_indexes, init_db
+from server.routes.recurring import recurring_bp
 
 try:
     from dotenv import load_dotenv
@@ -74,41 +76,6 @@ DEFAULT_CASHBACK_SCENARIOS: List[Dict[str, Any]] = [
 
 # -------------------------
 # Infra helpers
-# -------------------------
-
-def safe_create_index(coll, keys, **opts):
-    """
-    Create an index but gracefully:
-    - ignore IndexOptionsConflict (code 85),
-    - handle IndexKeySpecsConflict (code 86) by dropping the conflicting named index
-      and recreating it with the requested options.
-    """
-    requested_name = opts.get("name")
-    try:
-        return coll.create_index(keys, **opts)
-    except OperationFailure as e:
-        code = getattr(e, "code", None)
-        if code == 85:  # IndexOptionsConflict
-            return None
-        if code == 86:  # IndexKeySpecsConflict
-            # infer mongo's auto-generated name if not supplied
-            if not requested_name:
-                parts = [f"{k}_{int(direction)}" for k, direction in keys]
-                requested_name = "_".join(parts)
-            try:
-                if requested_name:
-                    coll.drop_index(requested_name)
-                else:
-                    info = coll.index_information()
-                    for name, spec in info.items():
-                        if spec.get("key") == keys:
-                            coll.drop_index(name)
-                return coll.create_index(keys, **opts)
-            except OperationFailure:
-                raise e
-        raise
-
-
 def load_environment() -> None:
     if load_dotenv is not None:
         load_dotenv()
@@ -188,54 +155,6 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
         )
     except JWTError as exc:  # pragma: no cover - runtime validation
         raise Unauthorized(f"Token verification failed: {exc}")
-
-
-# -------------------------
-# DB shape
-# -------------------------
-
-def ensure_indexes(database) -> None:
-    # users
-    users = database["users"]
-    safe_create_index(users, [("auth0_id", ASCENDING)], unique=True)
-    safe_create_index(users, [("email", ASCENDING)], unique=True, sparse=True)
-
-    # accounts
-    accounts = database["accounts"]
-    safe_create_index(accounts, [("userId", ASCENDING)], name="accounts_userId")
-    safe_create_index(
-        accounts,
-        [("userId", ASCENDING), ("account_type", ASCENDING), ("account_mask", ASCENDING)],
-        unique=True,
-        sparse=True,
-        name="userId_1_account_type_1_account_mask_1",
-    )
-    safe_create_index(accounts, [("userId", ASCENDING), ("card_product_id", ASCENDING)], sparse=True)
-    safe_create_index(accounts, [("userId", ASCENDING), ("card_product_slug", ASCENDING)], sparse=True)
-
-    # transactions
-    tx = database["transactions"]
-    safe_create_index(tx, [("userId", ASCENDING), ("date", DESCENDING)])
-    safe_create_index(tx, [("userId", ASCENDING), ("accountId", ASCENDING), ("date", DESCENDING)])
-
-    # credit_cards
-    cards = database["credit_cards"]
-    safe_create_index(cards, [("issuer", ASCENDING), ("network", ASCENDING)])
-    safe_create_index(cards, [("slug", ASCENDING)], unique=True, name="slug_1")
-
-    # applications
-    applications = database["applications"]
-    safe_create_index(
-        applications,
-        [("userId", ASCENDING), ("product_slug", ASCENDING)],
-        unique=True,
-        sparse=True,
-        name="userId_1_product_slug_1",
-    )
-
-    # mandates
-    mandates = database["mandates"]
-    safe_create_index(mandates, [("userId", ASCENDING), ("created_at", DESCENDING)])
 
 
 def ensure_collections(database) -> None:
@@ -622,6 +541,7 @@ def create_app() -> Flask:
 
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
+    init_db(database)
     ensure_indexes(database)
     ensure_collections(database)
 
@@ -2198,6 +2118,7 @@ def create_app() -> Flask:
 
     # mount blueprint
     app.register_blueprint(api_bp)
+    app.register_blueprint(recurring_bp)
 
     return app
 
