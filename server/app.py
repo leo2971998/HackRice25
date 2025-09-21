@@ -24,8 +24,8 @@ from services.spend import (
     load_transactions,
 )
 from mock_transactions import generate_mock_transactions
-from server.db import ensure_indexes, init_db
-from server.routes.recurring import recurring_bp
+from db import ensure_indexes, init_db
+from routes.recurring import recurring_bp
 
 try:
     from dotenv import load_dotenv
@@ -261,60 +261,6 @@ def get_or_create_user(users: Collection, payload: Dict[str, Any]) -> Dict[str, 
 # Spend + LLM helpers
 # -------------------------
 
-def build_llm_context(
-        database,
-        user_id: ObjectId,
-        window_days: int = 90,
-        card_object_ids: Optional[List[ObjectId]] = None,
-) -> Dict[str, Any]:
-    """
-    Produce a compact JSON packet Gemini can use.
-    Keep it ~2–3 KB. Avoid PII beyond first name if possible.
-    """
-    txns = load_transactions(database, user_id, window_days, card_object_ids)
-    breakdown = aggregate_spend_details(txns)
-
-    top_cats = breakdown["categories"][:6]
-    top_merchants = breakdown["merchants"][:10]
-
-    rec = [m for m in top_merchants if m["count"] >= 3]
-
-    monthly_est = 0.0
-    if window_days > 0 and breakdown["total"] > 0:
-        monthly_est = round((breakdown["total"] / window_days) * 30, 2)
-
-    owned = list(
-        database["accounts"].find(
-            {"userId": user_id, "account_type": "credit_card"},
-            {"_id": 1, "issuer": 1, "network": 1, "nickname": 1, "card_product_slug": 1},
-        )
-    )
-    owned_cards = [
-        {
-            "accountId": str(c["_id"]),
-            "issuer": c.get("issuer"),
-            "network": c.get("network"),
-            "nickname": c.get("nickname"),
-            "product_slug": c.get("card_product_slug"),
-        }
-        for c in owned
-    ]
-
-    return {
-        "window_days": window_days,
-        "total_spend_window": breakdown["total"],
-        "monthly_spend_estimate": monthly_est,
-        "top_categories": [
-            {"name": c["key"], "total": c["amount"], "pct": round(c["pct"], 4), "count": c["count"]}
-            for c in top_cats
-        ],
-        "top_merchants": [
-            {"name": m["name"], "category": m["category"], "total": m["amount"], "count": m["count"]}
-            for m in top_merchants
-        ],
-        "recurring_merchants": [{"name": m["name"], "count": m["count"]} for m in rec],
-        "owned_cards": owned_cards,
-    }
 
 def build_llm_context(database, user_id: ObjectId, window_days: int = 90, card_object_ids=None) -> Dict[str, Any]:
     """
@@ -552,7 +498,35 @@ def create_app() -> Flask:
         DISABLE_AUTH=disable_auth,
     )
 
-    # ---------- Normalizers & maps ----------
+    def _set_current_user():
+        """Populate g.current_user for ALL routes (blueprint or not)."""
+    # Always let CORS preflight through
+        if request.method == "OPTIONS":
+            return ("", 204)
+
+        # If already set (by another hook), do nothing
+        if getattr(g, "current_user", None) is not None:
+            return
+
+        if app.config.get("DISABLE_AUTH", False):
+            # Local dev user
+            payload = {
+                "sub": "dev|local",
+                "email": "dev@local",
+                "email_verified": True,
+                "name": "Dev User",
+            }
+        else:
+            payload = decode_token(app.config["AUTH_SETTINGS"])
+
+        g.current_token = payload
+        g.current_user = get_or_create_user(database["users"], payload)
+
+    # Register the hook for all routes
+    app.before_request(_set_current_user)
+
+
+# ---------- Normalizers & maps ----------
     def normalize_transactions(doc: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(doc)
         if "userId" not in out:
@@ -736,44 +710,43 @@ def create_app() -> Flask:
         return payload
 
     @api_bp.before_request
-    def authenticate_request() -> None:
+    def authenticate_request():
         # Let CORS preflight through
         if request.method == "OPTIONS":
             return ("", 204)
 
-        # Require real auth in all environments unless you EXPLICITLY set DISABLE_AUTH=1
+        # If app-level hook already set the user, do nothing
+        if getattr(g, "current_user", None) is not None:
+            return
+
+        # In dev, you can just rely on the app-level hook; do nothing here
         if app.config.get("DISABLE_AUTH", False):
-            # Fail fast so you don't accidentally ship dev mode
-            raise Unauthorized("Auth disabled. Set DISABLE_AUTH=0 (or unset) to require login.")
+            return
 
-        settings = app.config["AUTH_SETTINGS"]  # from get_auth_settings()
-
-        # Verify the access token via JWKS (real Auth0)
+        # Otherwise, enforce real auth (keep your JWKS/userinfo logic as needed)
+        settings = app.config["AUTH_SETTINGS"]
         claims = decode_token(settings)
 
-        # Some Auth0 access tokens won't include email by default; try /userinfo once as a best-effort
-        if not claims.get("email"):
-            try:
+        # (Optional) Best-effort /userinfo fetch here if you want the email:
+        try:
+            if not claims.get("email"):
                 auth_header = request.headers.get("Authorization", "")
                 token = auth_header.split()[1] if auth_header.lower().startswith("bearer ") else None
                 if token:
-                    ui = requests.get(
-                        f"https://{settings['domain']}/userinfo",
-                        headers={"Authorization": f"Bearer {token}"},
-                        timeout=5,
-                    )
+                    ui = requests.get(f"https://{settings['domain']}/userinfo",
+                                      headers={"Authorization": f"Bearer {token}"}, timeout=5)
                     if ui.ok:
                         profile = ui.json()
                         claims.setdefault("email", profile.get("email"))
                         claims.setdefault("email_verified", profile.get("email_verified"))
                         if profile.get("name") and not claims.get("name"):
                             claims["name"] = profile["name"]
-            except Exception:
-                # non-fatal; proceed without email
-                pass
+        except Exception:
+            pass
 
         g.current_token = claims
         g.current_user = get_or_create_user(app.config["MONGO_DB"]["users"], claims)
+
 
 
     # -------- me / status --------

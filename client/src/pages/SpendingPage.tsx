@@ -1,175 +1,275 @@
-import { useMemo, useState } from "react"
-
-import { MerchantDetailsTable } from "@/components/details/MerchantDetailsTable"
-import { PageSection } from "@/components/layout/PageSection"
-import { StatTile } from "@/components/cards/StatTile"
-import { TransactionsTable } from "@/components/transactions/TransactionsTable"
-import { UpcomingTransactionsTable } from "@/components/transactions/UpcomingTransactionsTable"
+import { useEffect, useMemo, useState } from "react"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useScanRecurring, useSpendDetails, useTransactions, useUpcomingTransactions } from "@/hooks/useApi"
-import { useToast } from "@/components/ui/use-toast"
-import { cn } from "@/lib/utils"
+import { useSpendDetails, useTransactions } from "@/hooks/useApi"
 
-const WINDOW_OPTIONS = [30, 60, 90]
+// ---- Types aligned to your APIs ----
+type Tx = {
+    id?: string
+    _id?: string
+    date: string
+    merchantName: string
+    category?: string
+    amount: number     // USD from /api/transactions
+    status?: string
+}
 
-const currencyFormatter = new Intl.NumberFormat(undefined, {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 2,
-})
+type MerchantRow = {
+    name: string
+    category: string
+    amount: number
+    count: number
+    logoUrl?: string
+}
 
-const numberFormatter = new Intl.NumberFormat()
+// ---- Helpers ----
+const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
-type SpendingTab = "transactions" | "merchants" | "upcoming"
+const MERCHANT_OVERRIDES: Record<string, string> = {
+    kfc: "KFC",
+    heb: "H-E-B",
+    chickfila: "Chick-fil-A",
+    mcdonalds: "McDonald’s",
+    atandt: "AT&T",
+}
+function titleCaseWords(name?: string) {
+    if (!name) return ""
+    return name
+        .split(/\s+/)
+        .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+        .join(" ")
+}
+function formatMerchant(name?: string) {
+    if (!name) return ""
+    const key = name.toLowerCase()
+    if (MERCHANT_OVERRIDES[key]) return MERCHANT_OVERRIDES[key]
+    return titleCaseWords(name)
+}
 
-const TABS: { id: SpendingTab; label: string }[] = [
-  { id: "transactions", label: "Transactions" },
-  { id: "merchants", label: "Merchants" },
-  { id: "upcoming", label: "Upcoming bills" },
-]
+const WINDOW_OPTIONS = [30, 60, 90] as const
+const PAGE_SIZE_OPTIONS = [5, 10] as const
 
 export default function SpendingPage() {
-  const [windowDays, setWindowDays] = useState<number>(30)
-  const [activeTab, setActiveTab] = useState<SpendingTab>("transactions")
-  const { toast } = useToast()
+    const [tab, setTab] = useState<"merchants" | "transactions">("merchants")
+    const [windowDays, setWindowDays] = useState<number>(30)
 
-  const { data: transactionsData, isLoading: transactionsLoading } = useTransactions({ windowDays })
-  const { data: detailData, isLoading: detailsLoading } = useSpendDetails(windowDays)
-  const {
-    data: upcomingData,
-    isLoading: upcomingLoading,
-    refetch: refetchUpcoming,
-  } = useUpcomingTransactions()
+    // Shared page size for both tabs
+    const [pageSize, setPageSize] = useState<number>(10)
 
-  const { mutate: scanRecurring, isPending: scanPending } = useScanRecurring({
-    onSuccess: (data) => {
-      refetchUpcoming()
-      toast({
-        title: "Recurring scan complete",
-        description: data ? `Detected ${data.scanned} merchant patterns.` : undefined,
-      })
-    },
-    onError: (error) => {
-      toast({
-        title: "Scan failed",
-        description: error.message,
-      })
-    },
-  })
+    // Independent page indices per tab
+    const [merchantPage, setMerchantPage] = useState<number>(1)
+    const [txPageIndex, setTxPageIndex] = useState<number>(1)
 
-  const transactions = transactionsData?.transactions ?? []
-  const merchants = detailData?.merchants ?? []
-  const upcoming = upcomingData?.upcoming ?? []
+    // Fetch from your working hooks
+    const { data: detailData, isLoading: merchantsLoading } = useSpendDetails(windowDays)
+    const { data: transactionsData, isLoading: txLoading } = useTransactions({ windowDays })
 
-  const summary = useMemo(() => {
-    const totalSpend = transactionsData?.total ?? 0
-    const txnCount = transactionsData?.transactionCount ?? 0
-    const merchantCount = merchants.length
-    const upcomingTotal = upcoming.reduce((sum, item) => sum + (item.amountPredicted ?? 0), 0)
+    // ----- Merchants (server-grouped) -----
+    const merchantsRaw: MerchantRow[] = detailData?.merchants ?? []
+    const merchants = useMemo(
+        () => [...merchantsRaw].sort((a, b) => b.amount - a.amount),
+        [merchantsRaw]
+    )
 
-    return {
-      totalSpend,
-      txnCount,
-      merchantCount,
-      upcomingTotal,
-      upcomingCount: upcoming.length,
-    }
-  }, [transactionsData, merchants, upcoming])
+    // Merchants pagination
+    const merchTotal = merchants.length
+    const merchTotalPages = Math.max(1, Math.ceil(merchTotal / pageSize))
+    useEffect(() => setMerchantPage(1), [merchTotal, pageSize])
+    const merchPageClamped = Math.min(merchantPage, merchTotalPages)
+    const merchStartIdx = (merchPageClamped - 1) * pageSize
+    const merchEndIdx = Math.min(merchStartIdx + pageSize, merchTotal)
+    const merchantsPage = merchants.slice(merchStartIdx, merchEndIdx)
 
-  const handleWindowChange = (value: string) => {
-    const parsed = Number(value)
-    if (!Number.isNaN(parsed)) {
-      setWindowDays(parsed)
-    }
-  }
+    // ----- Transactions -----
+    const txsAll: Tx[] = (transactionsData?.transactions as Tx[]) ?? []
 
-  const handleScanRecurring = () => {
-    scanRecurring()
-  }
+    // Transactions pagination
+    const txTotal = txsAll.length
+    const txTotalPages = Math.max(1, Math.ceil(txTotal / pageSize))
+    useEffect(() => setTxPageIndex(1), [txTotal, pageSize])
+    const txPageClamped = Math.min(txPageIndex, txTotalPages)
+    const txStartIdx = (txPageClamped - 1) * pageSize
+    const txEndIdx = Math.min(txStartIdx + pageSize, txTotal)
+    const txPage = txsAll.slice(txStartIdx, txEndIdx)
 
-  return (
-    <div className="space-y-10">
-      <PageSection
-        title="Spending activity"
-        description="Dive into every transaction, see which merchants dominate your budget, and preview upcoming bills before they hit."
-        actions={
-          <Select value={String(windowDays)} onValueChange={handleWindowChange}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Window" />
-            </SelectTrigger>
-            <SelectContent>
-              {WINDOW_OPTIONS.map((option) => (
-                <SelectItem key={option} value={String(option)}>
-                  Last {option} days
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        }
-      >
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatTile
-            label="Window spend"
-            value={currencyFormatter.format(summary.totalSpend)}
-            caption={`${numberFormatter.format(summary.txnCount)} transactions`}
-          />
-          <StatTile
-            label="Active merchants"
-            value={numberFormatter.format(summary.merchantCount)}
-            caption="Unique merchants in this window"
-          />
-          <StatTile
-            label="Predicted bills"
-            value={currencyFormatter.format(summary.upcomingTotal)}
-            caption={`${numberFormatter.format(summary.upcomingCount)} upcoming`}
-          />
-          <StatTile
-            label="View"
-            value={TABS.find((tab) => tab.id === activeTab)?.label ?? "Transactions"}
-            caption="Switch tabs below to explore"
-          />
+    return (
+        <div className="space-y-6">
+            {/* Header + controls */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+                <h1 className="text-2xl font-semibold">Spending</h1>
+
+                <div className="flex items-center gap-2">
+                    {/* Window selector (feeds both hooks) */}
+                    <Select value={String(windowDays)} onValueChange={(v) => setWindowDays(Number(v))}>
+                        <SelectTrigger className="w-[160px]">
+                            <SelectValue placeholder="Window" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {WINDOW_OPTIONS.map((d) => (
+                                <SelectItem key={d} value={String(d)}>
+                                    Last {d} days
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+
+                    {/* Rows per page for BOTH tabs */}
+                    <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                        <SelectTrigger className="w-[140px]">
+                            <SelectValue placeholder="Rows/page" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {PAGE_SIZE_OPTIONS.map((n) => (
+                                <SelectItem key={n} value={String(n)}>
+                                    {n} / page
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            </div>
+
+            <Tabs value={tab} onValueChange={(v) => setTab(v as any)} className="w-full">
+                <TabsList className="mb-3">
+                    <TabsTrigger value="merchants">Merchants</TabsTrigger>
+                    <TabsTrigger value="transactions">Transactions</TabsTrigger>
+                </TabsList>
+
+                {/* Merchants tab (server data + pagination) */}
+                <TabsContent value="merchants" className="space-y-3">
+                    {/* Pager header */}
+                    <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm opacity-80">
+                            {merchTotal === 0 ? "No merchants" : `${merchStartIdx + 1}–${merchEndIdx} of ${merchTotal}`}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setMerchantPage((p) => Math.max(1, p - 1))}
+                                disabled={merchPageClamped <= 1}
+                            >
+                                Prev
+                            </Button>
+                            <span className="text-sm tabular-nums">
+                Page {merchPageClamped} / {merchTotalPages}
+              </span>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setMerchantPage((p) => Math.min(merchTotalPages, p + 1))}
+                                disabled={merchPageClamped >= merchTotalPages}
+                            >
+                                Next
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border">
+                        <table className="min-w-full text-sm">
+                            <thead className="bg-muted/50">
+                            <tr>
+                                <th className="text-left p-3">Merchant</th>
+                                <th className="text-right p-3">Transactions</th>
+                                <th className="text-right p-3">Spend</th>
+                                <th className="text-left p-3">Category</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {merchantsLoading ? (
+                                <tr><td colSpan={4} className="p-4">Loading…</td></tr>
+                            ) : merchantsPage.length === 0 ? (
+                                <tr><td colSpan={4} className="p-4">No results.</td></tr>
+                            ) : (
+                                merchantsPage.map((m) => (
+                                    <tr key={m.name} className="border-t">
+                                        <td className="p-3">{formatMerchant(m.name)}</td>
+                                        <td className="p-3 text-right">{m.count}</td>
+                                        <td className="p-3 text-right">{currency.format(m.amount)}</td>
+                                        <td className="p-3">{m.category || ""}</td>
+                                    </tr>
+                                ))
+                            )}
+                            </tbody>
+                            {!merchantsLoading && merchantsPage.length > 0 && (
+                                <tfoot>
+                                <tr className="border-t bg-muted/30">
+                                    <td className="p-3 font-medium">Subtotal (page)</td>
+                                    <td className="p-3 text-right"></td>
+                                    <td className="p-3 text-right font-medium">
+                                        {currency.format(merchantsPage.reduce((s, r) => s + (r.amount || 0), 0))}
+                                    </td>
+                                    <td className="p-3"></td>
+                                </tr>
+                                </tfoot>
+                            )}
+                        </table>
+                    </div>
+                </TabsContent>
+
+                {/* Transactions tab with pagination */}
+                <TabsContent value="transactions" className="space-y-3">
+                    {/* Pager header */}
+                    <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm opacity-80">
+                            {txTotal === 0 ? "No transactions" : `${txStartIdx + 1}–${txEndIdx} of ${txTotal}`}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setTxPageIndex((p) => Math.max(1, p - 1))}
+                                disabled={txPageClamped <= 1}
+                            >
+                                Prev
+                            </Button>
+                            <span className="text-sm tabular-nums">
+                Page {txPageClamped} / {txTotalPages}
+              </span>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setTxPageIndex((p) => Math.min(txTotalPages, p + 1))}
+                                disabled={txPageClamped >= txTotalPages}
+                            >
+                                Next
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border">
+                        <table className="min-w-full text-sm">
+                            <thead className="bg-muted/50">
+                            <tr>
+                                <th className="text-left p-3">Date</th>
+                                <th className="text-left p-3">Merchant</th>
+                                <th className="text-left p-3">Category</th>
+                                <th className="text-right p-3">Amount</th>
+                                <th className="text-right p-3">Status</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {txLoading ? (
+                                <tr><td colSpan={5} className="p-4">Loading…</td></tr>
+                            ) : txPage.length === 0 ? (
+                                <tr><td colSpan={5} className="p-4">No results.</td></tr>
+                            ) : (
+                                txPage.map((t, i) => (
+                                    <tr key={t.id ?? t._id ?? `${t.date}-${i}`} className="border-t">
+                                        <td className="p-3">{new Date(t.date).toLocaleDateString()}</td>
+                                        <td className="p-3">{formatMerchant(t.merchantName)}</td>
+                                        <td className="p-3">{t.category ?? ""}</td>
+                                        <td className="p-3 text-right">{currency.format(Number(t.amount || 0))}</td>
+                                        <td className="p-3 text-right capitalize">{t.status ?? ""}</td>
+                                    </tr>
+                                ))
+                            )}
+                            </tbody>
+                        </table>
+                    </div>
+                </TabsContent>
+            </Tabs>
         </div>
-      </PageSection>
-
-      <section className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-white/70 p-1 text-sm shadow-sm dark:bg-zinc-900/60">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  "rounded-full px-4 py-1.5 font-medium transition",
-                  activeTab === tab.id
-                    ? "bg-primary text-primary-foreground shadow-soft"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          {activeTab === "upcoming" ? (
-            <Button onClick={handleScanRecurring} disabled={scanPending} variant="outline">
-              {scanPending ? "Scanning…" : "Scan for recurring bills"}
-            </Button>
-          ) : null}
-        </div>
-
-        {activeTab === "transactions" ? (
-          <TransactionsTable data={transactions} isLoading={transactionsLoading} />
-        ) : null}
-
-        {activeTab === "merchants" ? (
-          <MerchantDetailsTable data={merchants} isLoading={detailsLoading} />
-        ) : null}
-
-        {activeTab === "upcoming" ? (
-          <UpcomingTransactionsTable data={upcoming} isLoading={upcomingLoading || scanPending} />
-        ) : null}
-      </section>
-    </div>
-  )
+    )
 }
