@@ -13,8 +13,8 @@ export default function BestCardPage() {
   return (
     <div className="space-y-10">
       <PageSection
-        title="Best Card"
-        description="Type a merchant and see which of your cards earns the most. We will also show ways to save more."
+        title="Smart Swipe"
+        description="Type a merchant to see your top card and smarter alternatives. We will also show ways to save more."
       />
       <BestCardFinder
         selectedCardIds={selectedCardIds}

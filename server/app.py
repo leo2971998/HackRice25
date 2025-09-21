@@ -2401,7 +2401,7 @@ def create_app() -> Flask:
         ]
         rows = list(database["accounts"].aggregate(pipeline))
         return jsonify(rows)
-
+    
     @api_bp.route("/recommendations/best-card", methods=["GET", "POST"])
     def best_card_for_merchant():
         """
@@ -2530,7 +2530,7 @@ def create_app() -> Flask:
         owned_slugs = {row["product"]["slug"] for row in owned_rows}
         alt_payload = []
         for prod in app.config["MONGO_DB"]["credit_cards"].find(
-                {"active": True, "slug": {"$nin": list(owned_slugs)}}
+            {"active": True, "slug": {"$nin": list(owned_slugs)}}
         ):
             pct, pct_int, text, cap, cats = compute_for_product(prod)
             alt_payload.append(
@@ -2564,8 +2564,6 @@ def create_app() -> Flask:
                 "ownedRateInt": best_owned_pct_int,
             }
         )
-
-
     @api_bp.post("/transactions/mock/generate")
     def generate_mock_for_account():
         """
