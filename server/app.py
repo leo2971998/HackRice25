@@ -311,8 +311,20 @@ def fetch_jwks(jwks_url: str) -> Dict[str, Any]:
     return response.json()
 
 
-def get_jwks(jwks_url: str) -> Dict[str, Any]:
-    if not JWKS_CACHE["keys"]:
+def get_jwks(jwks_url: str, *, force_refresh: bool = False) -> Dict[str, Any]:
+    """Return JWKS data, optionally forcing a refresh.
+
+    Auth0 rotates signing keys occasionally. When that happens, a long-lived
+    process that cached the previous JWKS forever would fail to validate tokens
+    signed with the new key (resulting in 401s for newly logged-in users).
+
+    By allowing callers to request a refresh we can retry verification with a
+    fresh key set when needed without forcing every request to re-download the
+    JWKS.
+    """
+
+    if force_refresh or not JWKS_CACHE.get("keys"):
+        JWKS_CACHE.clear()
         JWKS_CACHE.update(fetch_jwks(jwks_url))
     return JWKS_CACHE
 
@@ -337,7 +349,13 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
         raise Unauthorized("Authorization header must start with Bearer")
     token = auth_header.split()[1]
     jwks = get_jwks(settings["jwks_url"])
-    rsa_key = get_rsa_key(token, jwks)
+    try:
+        rsa_key = get_rsa_key(token, jwks)
+    except Unauthorized:
+        # Token might be signed with a key that rotated since we cached the
+        # JWKS. Refresh and try again once before surfacing the failure.
+        jwks = get_jwks(settings["jwks_url"], force_refresh=True)
+        rsa_key = get_rsa_key(token, jwks)
     try:
         return jwt.decode(
             token,
@@ -347,7 +365,21 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
             issuer=settings["issuer"],
         )
     except JWTError as exc:  # pragma: no cover - runtime validation
-        raise Unauthorized(f"Token verification failed: {exc}")
+        # Similar to the key lookup above, a cached JWKS might contain an
+        # outdated key (e.g., if Auth0 rotates signing keys). Refresh once and
+        # retry before giving up.
+        jwks = get_jwks(settings["jwks_url"], force_refresh=True)
+        rsa_key = get_rsa_key(token, jwks)
+        try:
+            return jwt.decode(
+                token,
+                rsa_key,
+                algorithms=["RS256"],
+                audience=settings["audience"],
+                issuer=settings["issuer"],
+            )
+        except JWTError as exc_retry:  # pragma: no cover - runtime validation
+            raise Unauthorized(f"Token verification failed: {exc_retry}")
 
 
 def ensure_collections(database) -> None:
