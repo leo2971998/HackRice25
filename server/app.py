@@ -2404,139 +2404,164 @@ def create_app() -> Flask:
 
     @api_bp.route("/recommendations/best-card", methods=["GET", "POST"])
     def best_card_for_merchant():
+        """
+        Find the best owned card for a given merchant/category and suggest alternatives.
+        Returns richer fields for the frontend:
+        - bestOwned: { accountId, nickname, issuer, rewardRateText, percentBack, categories[], cap? }
+        - alternatives[]: { id, name, issuer, rewardRateText, percentBack, categories[], cap? }
+        - category, categorySource, matchConfidence
+        """
         user = g.current_user
 
+        # ---- inputs (POST preferred; GET supported) ----
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
-            merchant = (data.get("merchant") or "").strip()
-            spend_val = data.get("assumedMonthlySpend")
-            if spend_val is None:
-                spend_val = data.get("spend")  # tolerate old clients
-            try:
-                spend = float(spend_val or 150)
-            except (TypeError, ValueError):
-                spend = 150.0
+            merchant_input = (data.get("merchant") or "").strip()
+            spend = float(data.get("assumedMonthlySpend") or 150)
+            selected_ids = data.get("selectedCardIds") or []
         else:
-            merchant = (request.args.get("merchant") or "").strip()
-            try:
-                spend = float(request.args.get("assumedMonthlySpend") or request.args.get("spend") or 150)
-            except (TypeError, ValueError):
-                spend = 150.0
+            merchant_input = (request.args.get("merchant") or "").strip()
+            spend = float(request.args.get("spend") or 150)
+            selected_ids = request.args.getlist("selectedCardIds")
 
-        if not merchant:
+        if not merchant_input:
             raise BadRequest("merchant is required")
 
-        # normalize merchant -> category
+        # ---- merchant lookup + category resolution (with provenance) ----
         m = app.config["MONGO_DB"]["merchants"].find_one(
-            {"$or": [{"name": merchant}, {"aliases": merchant}, {"slug": merchant.lower()}]}
+            {"$or": [{"name": merchant_input}, {"aliases": merchant_input}, {"slug": merchant_input.lower()}]}
         )
         if not m:
             raise NotFound("Merchant not found")
 
-        def normalize_merchant_category(doc: Dict[str, Any]) -> str:
-            MCC_TO_CATEGORY = {"5411": "Groceries", "5499": "Groceries", "5812": "Food and Drink", "5814": "Food and Drink"}
-            CATEGORY_ALIAS = {
-                "dining": "Food and Drink",
-                "restaurant": "Food and Drink",
-                "restaurants": "Food and Drink",
-                "grocery": "Groceries",
-                "groceries": "Groceries",
-                "travel": "Travel",
-                "pharmacy": "Drugstores",
-                "drugstore": "Drugstores",
-                "entertainment": "Entertainment",
-                "streaming": "Streaming",
-                "transit": "Transportation",
-            }
+        def resolve_category_with_source(doc: Dict[str, Any]) -> tuple[str, str]:
+            # Mirrors normalize_merchant_category, but also returns the source label
             ov = (doc.get("overrides") or {})
             if isinstance(ov, dict) and ov.get("treatAs"):
                 raw = str(ov["treatAs"]).strip().lower()
-                return CATEGORY_ALIAS.get(raw, doc["overrides"]["treatAs"])
+                cat = CATEGORY_ALIAS.get(raw, ov["treatAs"])
+                return cat, "alias"
             if doc.get("primaryCategory"):
                 raw = str(doc["primaryCategory"]).strip().lower()
-                return CATEGORY_ALIAS.get(raw, doc["primaryCategory"])
+                cat = CATEGORY_ALIAS.get(raw, doc["primaryCategory"])
+                return cat, "model"
             mcc = str(doc.get("mcc") or "")
             if mcc in MCC_TO_CATEGORY:
-                return MCC_TO_CATEGORY[mcc]
-            return "Other"
+                return MCC_TO_CATEGORY[mcc], "mcc"
+            return "Other", "model"
 
-        category = normalize_merchant_category(m)
+        category, category_source = resolve_category_with_source(m)
 
-        # helper (same logic you already have in app.py)
-        def earn_percent_for_product(product: Dict[str, Any], category: str, monthly_spend: float) -> float:
-            base = float(product.get("base_cashback", 0.0) or 0.0)
-            rules = product.get("rewards") or []
-            rule = next((r for r in rules if r.get("category") == category), None)
+        # how confident was our merchant match?
+        match_conf = "exact"
+        if m.get("name") != merchant_input and m.get("slug") != merchant_input.lower():
+            match_conf = "high" if merchant_input in (m.get("aliases") or []) else "low"
+
+        # ---- helpers ----
+        def product_categories(prod: Dict[str, Any]) -> list[str]:
+            return [r["category"] for r in (prod.get("rewards") or []) if isinstance(r, dict) and r.get("category")]
+
+        def category_cap_for(prod: Dict[str, Any], cat: str) -> dict | None:
+            rule = next((r for r in (prod.get("rewards") or []) if r.get("category") == cat), None)
             if not rule:
-                return base
-            rate = float(rule.get("rate", base) or base)
+                return None
             cap = rule.get("cap_monthly")
-            if not cap:
-                return rate
+            if cap is None:
+                return None
             try:
                 cap_val = float(cap)
             except Exception:
-                return rate
-            spend_amt = float(monthly_spend or 0)
-            if spend_amt <= 0:
-                return rate
-            if spend_amt <= cap_val:
-                return rate
-            return (cap_val * rate + (spend_amt - cap_val) * base) / spend_amt
+                return None
+            base = float(prod.get("base_cashback", 0.0) or 0.0)
+            return {"amount": cap_val, "period": "month", "postRate": int(round(base * 100))}
 
-        # join owned cards with catalog
+        def compute_for_product(prod: Dict[str, Any]) -> tuple[float, int, str, dict | None, list[str]]:
+            pct = float(earn_percent_for_product(prod, category, spend))
+            pct_int = int(round(pct * 100))
+            text = f"{pct_int}% {category}"
+            cap = category_cap_for(prod, category)
+            cats = product_categories(prod)
+            return pct, pct_int, text, cap, cats
+
+        # ---- owned cards (joined with catalog by slug in accounts.card_product_id) ----
         pipeline = [
             {"$match": {"userId": user["_id"], "account_type": "credit_card"}},
-            {"$lookup": {"from": "credit_cards", "localField": "card_product_id", "foreignField": "slug", "as": "product"}},
+            {
+                "$lookup": {
+                    "from": "credit_cards",
+                    "localField": "card_product_id",   # slug saved on account
+                    "foreignField": "slug",
+                    "as": "product",
+                }
+            },
             {"$unwind": "$product"},
         ]
+        # optional filter by selected ids
+        try:
+            obj_ids = [ObjectId(x) for x in selected_ids] if selected_ids else []
+            if obj_ids:
+                pipeline.insert(0, {"$match": {"_id": {"$in": obj_ids}}})
+        except Exception:
+            pass
+
         owned_rows = list(app.config["MONGO_DB"]["accounts"].aggregate(pipeline))
 
-        owned = []
+        owned_payload = []
         for row in owned_rows:
             prod = row["product"]
-            pct = float(earn_percent_for_product(prod, category, spend))
-            owned.append(
+            pct, pct_int, text, cap, cats = compute_for_product(prod)
+            owned_payload.append(
                 {
                     "accountId": str(row["_id"]),
                     "nickname": row.get("nickname") or prod.get("product_name"),
                     "issuer": row.get("issuer") or prod.get("issuer"),
-                    "rewardRateText": f"{int(round(pct * 100))}% {category}",
+                    "rewardRateText": text,
                     "percentBack": pct,
+                    "cap": cap,
+                    "categories": cats,
                 }
             )
 
-        best_owned = max(owned, key=lambda x: x["percentBack"]) if owned else None
+        best_owned = max(owned_payload, key=lambda x: x["percentBack"]) if owned_payload else None
         best_owned_pct = float(best_owned["percentBack"]) if best_owned else 0.0
+        best_owned_pct_int = int(round(best_owned_pct * 100))
 
-        # alternatives not owned
+        # ---- alternatives (active catalog cards that user doesn't own) ----
         owned_slugs = {row["product"]["slug"] for row in owned_rows}
-        alts = []
-        for prod in app.config["MONGO_DB"]["credit_cards"].find({"active": True, "slug": {"$nin": list(owned_slugs)}}):
-            pct = float(earn_percent_for_product(prod, category, spend))
-            diff = max(0.0, pct - best_owned_pct)
-            est = round(diff * spend, 2) if spend else None
-            alts.append(
+        alt_payload = []
+        for prod in app.config["MONGO_DB"]["credit_cards"].find(
+                {"active": True, "slug": {"$nin": list(owned_slugs)}}
+        ):
+            pct, pct_int, text, cap, cats = compute_for_product(prod)
+            alt_payload.append(
                 {
                     "id": prod.get("slug"),
                     "name": prod.get("product_name"),
                     "issuer": prod.get("issuer"),
-                    "rewardRateText": f"{int(round(pct * 100))}% {category}",
+                    "rewardRateText": text,
                     "percentBack": pct,
-                    "estSavingsMonthly": est,
+                    "cap": cap,
+                    "categories": cats,
+                    # convenience for UI; not used in strict filtering
+                    "estSavingsMonthly": round(max(0.0, (pct - best_owned_pct)) * spend, 2) if spend else None,
+                    "rateInt": pct_int,
                 }
             )
-        alts.sort(key=lambda x: x["percentBack"], reverse=True)
-        alts = alts[:3]
+
+        alt_payload.sort(key=lambda x: x["percentBack"], reverse=True)
+        alt_payload = alt_payload[:10]
 
         return jsonify(
             {
-                "merchant": m.get("name"),
+                "merchant": m.get("name") or merchant_input,
                 "category": category,
+                "categorySource": category_source,
+                "matchConfidence": match_conf,
                 "assumedMonthlySpend": spend,
                 "bestOwned": best_owned,
                 "youHaveThisCard": bool(best_owned),
-                "alternatives": alts,
+                "alternatives": alt_payload,
+                "ownedRateInt": best_owned_pct_int,
             }
         )
 
