@@ -911,7 +911,7 @@ def create_app() -> Flask:
         payload = request.get_json(force=True)
         collection = database["credit_cards"]
         now = datetime.utcnow()
-        if isinstance(payload, List):
+        if isinstance(payload, list):
             documents = [prepare_catalog_payload(item) for item in payload if isinstance(item, dict)]
             if not documents:
                 raise BadRequest("payload must contain at least one catalog entry")
@@ -1420,8 +1420,7 @@ def create_app() -> Flask:
             user_spend_mix=mix,
             recommendations=recommendations,
             history=history,
-            new_message=message_text,
-            context=llm_context,
+            new_message=message_text
         )
         timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         return jsonify({"reply": response_text, "timestamp": timestamp})
