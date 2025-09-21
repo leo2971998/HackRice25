@@ -58,7 +58,9 @@ export function CardSelector({
                         ) : null}
                     </div>
                 ) : (
-                    <div className={`flex flex-col gap-2 overflow-y-auto pr-1 ${heightClass}`}>
+                    <div
+                        className={`flex flex-col gap-2 overflow-y-auto overscroll-contain scroll-smooth pr-1 scrollbar-thin scrollbar-thumb-muted-foreground/30 hover:scrollbar-thumb-muted-foreground/50 scrollbar-track-transparent scrollbar-corner-transparent ${heightClass}`}
+                    >
                         {cards.map((c) => (
                             <CardRow
                                 key={c.id}

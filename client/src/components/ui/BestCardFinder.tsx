@@ -8,7 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Label } from "@/components/ui/Label";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -92,6 +92,7 @@ export function BestCardFinder({
   const [merchant, setMerchant] = useState("");
   const [basis, setBasis] = useState<SpendBasis>("monthly");
   const [spendInput, setSpendInput] = useState<string>("150");
+  const hasLinkedCards = accountRows.length > 0;
 
   const spendNumber = useMemo(() => {
     const n = parseFloat(spendInput);
@@ -180,6 +181,11 @@ export function BestCardFinder({
     const name = merchant.trim();
     if (!name) {
       setError("Enter a merchant");
+      setResult(null);
+      return;
+    }
+    if (!hasLinkedCards) {
+      setError("Link at least one card to get personalized results");
       setResult(null);
       return;
     }
@@ -420,14 +426,20 @@ export function BestCardFinder({
             <Button
               className="h-11 w-full whitespace-nowrap"
               onClick={onFind}
-              disabled={isLoading || loadingMerchants}
+              disabled={isLoading || loadingMerchants || !hasLinkedCards}
             >
               {isLoading ? "Finding…" : "Find best card"}
             </Button>
           </div>
         </div>
 
-        {/* Suggestions */}
+        {!hasLinkedCards && (
+          <div className="text-xs text-muted-foreground">
+            Link a card on the Cards page to unlock tailored picks.
+          </div>
+        )}
+
+        {/* Suggestions row lives BELOW the controls so it doesn't affect alignment */}o
         {filteredSuggestions.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {filteredSuggestions.map((m) => (

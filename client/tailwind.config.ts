@@ -1,6 +1,5 @@
 import type { Config } from "tailwindcss"
 import tailwindcssAnimate from "tailwindcss-animate"
-import scrollbar from "tailwind-scrollbar"
 
 const config: Config = {
     darkMode: ["class"],
@@ -55,10 +54,7 @@ const config: Config = {
             animation: { float: "float 4s ease-in-out infinite" },
         },
     },
-    plugins: [
-        tailwindcssAnimate,
-        scrollbar({ nocompatible: true }),
-    ],
+    plugins: [tailwindcssAnimate],
 }
 
 export default config
