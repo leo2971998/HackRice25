@@ -346,6 +346,56 @@ def build_llm_context(
         "owned_cards": owned_cards,
     }
 
+def build_llm_context(database, user_id: ObjectId, window_days: int = 90, card_object_ids=None) -> Dict[str, Any]:
+    """
+    Produce a small JSON packet Gemini can use.
+    Keep it < ~2–3 KB. No PII beyond first name if you want.
+    """
+    txns = load_transactions(database, user_id, window_days, card_object_ids)
+    breakdown = aggregate_spend_details(txns)
+
+    # top categories and merchants
+    top_cats = breakdown["categories"][:6]
+    top_merchants = breakdown["merchants"][:10]
+
+    # simple recurring guess: same merchant seen >= 3 times
+    rec = [m for m in top_merchants if m["count"] >= 3]
+
+    # estimate monthly spend from window
+    monthly_est = 0.0
+    if window_days > 0 and breakdown["total"] > 0:
+        monthly_est = round((breakdown["total"] / window_days) * 30, 2)
+
+    # owned cards (lightweight)
+    owned = list(database["accounts"].find(
+        {"userId": user_id, "account_type": "credit_card"},
+        {"_id": 1, "issuer": 1, "network": 1, "nickname": 1, "card_product_slug": 1}
+    ))
+    owned_cards = [{
+        "accountId": str(c["_id"]),
+        "issuer": c.get("issuer"),
+        "network": c.get("network"),
+        "nickname": c.get("nickname"),
+        "product_slug": c.get("card_product_slug"),
+    } for c in owned]
+
+    return {
+        "window_days": window_days,
+        "total_spend_window": breakdown["total"],
+        "monthly_spend_estimate": monthly_est,
+        "top_categories": [
+            {"name": c["key"], "total": c["amount"], "pct": round(c["pct"], 4), "count": c["count"]}
+            for c in top_cats
+        ],
+        "top_merchants": [
+            {"name": m["name"], "category": m["category"], "total": m["amount"], "count": m["count"]}
+            for m in top_merchants
+        ],
+        "recurring_merchants": [{"name": m["name"], "count": m["count"]} for m in rec],
+        "owned_cards": owned_cards,
+    }
+
+
 
 def parse_window_days(default: int = 30) -> int:
     raw = request.args.get("window", default)
@@ -911,7 +961,7 @@ def create_app() -> Flask:
         payload = request.get_json(force=True)
         collection = database["credit_cards"]
         now = datetime.utcnow()
-        if isinstance(payload, List):
+        if isinstance(payload, list):
             documents = [prepare_catalog_payload(item) for item in payload if isinstance(item, dict)]
             if not documents:
                 raise BadRequest("payload must contain at least one catalog entry")
@@ -1420,8 +1470,7 @@ def create_app() -> Flask:
             user_spend_mix=mix,
             recommendations=recommendations,
             history=history,
-            new_message=message_text,
-            context=llm_context,
+            new_message=message_text
         )
         timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         return jsonify({"reply": response_text, "timestamp": timestamp})

@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import os
+import os, json
 from typing import Dict, Iterable, List
-
 import requests
-
 
 MODEL = "gemini-2.5-flash"
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
-
 def _build_endpoint(api_key: str) -> str:
     return f"{BASE_URL}/{MODEL}:generateContent?key={api_key}"
-
 
 def _format_prompt(user_mix: Dict[str, float], card_names: Iterable[str]) -> Dict[str, object]:
     cards_list = ", ".join(card_names)
@@ -25,22 +21,13 @@ def _format_prompt(user_mix: Dict[str, float], card_names: Iterable[str]) -> Dic
     )
     return {"contents": [{"parts": [{"text": prompt_text}]}]}
 
-
 def explain_recommendations(user_mix: Dict[str, float], card_names: Iterable[str]) -> str:
-    """Return a brief explanation for the recommended cards.
-
-    The Gemini API is optional—if a key is not configured or the request fails we simply
-    return an empty string so the deterministic scoring still works.
-    """
-
     card_names = list(card_names)
     if not card_names:
         return ""
-
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return ""
-
     try:
         response = requests.post(
             _build_endpoint(api_key),
@@ -50,19 +37,11 @@ def explain_recommendations(user_mix: Dict[str, float], card_names: Iterable[str
         response.raise_for_status()
     except requests.RequestException:
         return ""
-
     try:
         data = response.json()
-    except ValueError:
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
         return ""
-
-    try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError, TypeError):
-        return ""
-
-    return text
-
 
 def _format_spend_mix(user_spend_mix: Dict[str, float]) -> str:
     if not user_spend_mix:
@@ -76,11 +55,9 @@ def _format_spend_mix(user_spend_mix: Dict[str, float]) -> str:
         parts.append(f"{category}: {percent}")
     return ", ".join(parts)
 
-
 def _format_recommendations(recommendations: List[Dict[str, object]]) -> str:
     if not recommendations:
         return "No card recommendations available yet."
-
     lines = []
     for rec in recommendations:
         name = str(rec.get("product_name") or rec.get("slug") or "Card")
@@ -97,8 +74,10 @@ def _format_recommendations(recommendations: List[Dict[str, object]]) -> str:
         lines.append(f"- {name}{issuer_text}{net_text}")
     return "\n".join(lines)
 
-
-def _build_chat_contents(system_prompt: str, history: List[Dict[str, str]], new_message: str) -> Dict[str, object]:
+def _build_chat_contents(system_prompt: str,
+                         history: List[Dict[str, str]],
+                         new_message: str,
+                         context: Dict[str, object] | None) -> Dict[str, object]:
     conversation_lines: List[str] = []
     for entry in history:
         content = str(entry.get("content") or "").strip()
@@ -108,21 +87,24 @@ def _build_chat_contents(system_prompt: str, history: List[Dict[str, str]], new_
         speaker = "User" if author == "user" else "FinBot"
         conversation_lines.append(f"{speaker}: {content}")
 
-    prompt_sections = [system_prompt.strip()]
+    # keep context compact
+    ctx_text = json.dumps(context or {}, separators=(",", ":"), ensure_ascii=False)
+
+    pieces = [system_prompt.strip()]
+    pieces.append(f"Context:\n{ctx_text}")
     if conversation_lines:
-        prompt_sections.append("Conversation so far:\n" + "\n".join(conversation_lines))
-    prompt_sections.append(f"User: {new_message.strip()}\nFinBot:")
+        pieces.append("Conversation so far:\n" + "\n".join(conversation_lines))
+    pieces.append(f"User: {new_message.strip()}\nFinBot:")
 
-    prompt_text = "\n\n".join(section for section in prompt_sections if section)
-
+    prompt_text = "\n\n".join(p for p in pieces if p)
     return {"contents": [{"parts": [{"text": prompt_text}]}]}
-
 
 def generate_chat_response(
     user_spend_mix: Dict[str, float],
     recommendations: List[Dict[str, object]],
     history: List[Dict[str, str]],
     new_message: str,
+    context: Dict[str, object] | None = None,
 ) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -132,18 +114,18 @@ def generate_chat_response(
 You are FinBot, a friendly assistant for the Swipe Coach app. Your goal is to help users understand their spending and card recommendations.
 Do not provide financial advice. Keep responses concise and helpful.
 
-User financial context:
+User financial context (high level):
 - Spending mix (last 90 days): {_format_spend_mix(user_spend_mix)}
 - Top card recommendations:
 {_format_recommendations(recommendations)}
 
-If information is missing, acknowledge it and offer general guidance about how Swipe Coach can help.
+Use the JSON Context block for specific numbers like category totals, merchant counts, and monthly estimate. If a value is missing, say you do not know.
 """
 
     try:
         response = requests.post(
             _build_endpoint(api_key),
-            json=_build_chat_contents(system_prompt, history, new_message),
+            json=_build_chat_contents(system_prompt, history, new_message, context),
             timeout=20,
         )
         response.raise_for_status()
@@ -152,13 +134,6 @@ If information is missing, acknowledge it and offer general guidance about how S
 
     try:
         data = response.json()
-    except ValueError:
-        return "Flow Coach couldn't process that just now."
-
-    try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError, TypeError):
-        return "Flow Coach didn't catch that—could you rephrase?"
-
-    return text
-
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception:
+        return "Flow Coach did not catch that. Please rephrase."
