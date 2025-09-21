@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from bson import ObjectId
 from flask import Blueprint, Flask, jsonify, request, g
@@ -9,7 +9,7 @@ from jose import jwt
 from jose.exceptions import JWTError
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
-from pymongo.errors import CollectionInvalid, DuplicateKeyError, OperationFailure
+from pymongo.errors import CollectionInvalid, DuplicateKeyError
 import requests
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, Unauthorized
 
@@ -24,6 +24,8 @@ from services.spend import (
     load_transactions,
 )
 from mock_transactions import generate_mock_transactions
+from server.db import ensure_indexes, init_db
+from server.routes.recurring import recurring_bp
 
 try:
     from dotenv import load_dotenv
@@ -74,41 +76,6 @@ DEFAULT_CASHBACK_SCENARIOS: List[Dict[str, Any]] = [
 
 # -------------------------
 # Infra helpers
-# -------------------------
-
-def safe_create_index(coll, keys, **opts):
-    """
-    Create an index but gracefully:
-    - ignore IndexOptionsConflict (code 85),
-    - handle IndexKeySpecsConflict (code 86) by dropping the conflicting named index
-      and recreating it with the requested options.
-    """
-    requested_name = opts.get("name")
-    try:
-        return coll.create_index(keys, **opts)
-    except OperationFailure as e:
-        code = getattr(e, "code", None)
-        if code == 85:  # IndexOptionsConflict
-            return None
-        if code == 86:  # IndexKeySpecsConflict
-            # infer mongo's auto-generated name if not supplied
-            if not requested_name:
-                parts = [f"{k}_{int(direction)}" for k, direction in keys]
-                requested_name = "_".join(parts)
-            try:
-                if requested_name:
-                    coll.drop_index(requested_name)
-                else:
-                    info = coll.index_information()
-                    for name, spec in info.items():
-                        if spec.get("key") == keys:
-                            coll.drop_index(name)
-                return coll.create_index(keys, **opts)
-            except OperationFailure:
-                raise e
-        raise
-
-
 def load_environment() -> None:
     if load_dotenv is not None:
         load_dotenv()
@@ -188,54 +155,6 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
         )
     except JWTError as exc:  # pragma: no cover - runtime validation
         raise Unauthorized(f"Token verification failed: {exc}")
-
-
-# -------------------------
-# DB shape
-# -------------------------
-
-def ensure_indexes(database) -> None:
-    # users
-    users = database["users"]
-    safe_create_index(users, [("auth0_id", ASCENDING)], unique=True)
-    safe_create_index(users, [("email", ASCENDING)], unique=True, sparse=True)
-
-    # accounts
-    accounts = database["accounts"]
-    safe_create_index(accounts, [("userId", ASCENDING)], name="accounts_userId")
-    safe_create_index(
-        accounts,
-        [("userId", ASCENDING), ("account_type", ASCENDING), ("account_mask", ASCENDING)],
-        unique=True,
-        sparse=True,
-        name="userId_1_account_type_1_account_mask_1",
-    )
-    safe_create_index(accounts, [("userId", ASCENDING), ("card_product_id", ASCENDING)], sparse=True)
-    safe_create_index(accounts, [("userId", ASCENDING), ("card_product_slug", ASCENDING)], sparse=True)
-
-    # transactions
-    tx = database["transactions"]
-    safe_create_index(tx, [("userId", ASCENDING), ("date", DESCENDING)])
-    safe_create_index(tx, [("userId", ASCENDING), ("accountId", ASCENDING), ("date", DESCENDING)])
-
-    # credit_cards
-    cards = database["credit_cards"]
-    safe_create_index(cards, [("issuer", ASCENDING), ("network", ASCENDING)])
-    safe_create_index(cards, [("slug", ASCENDING)], unique=True, name="slug_1")
-
-    # applications
-    applications = database["applications"]
-    safe_create_index(
-        applications,
-        [("userId", ASCENDING), ("product_slug", ASCENDING)],
-        unique=True,
-        sparse=True,
-        name="userId_1_product_slug_1",
-    )
-
-    # mandates
-    mandates = database["mandates"]
-    safe_create_index(mandates, [("userId", ASCENDING), ("created_at", DESCENDING)])
 
 
 def ensure_collections(database) -> None:
@@ -622,6 +541,7 @@ def create_app() -> Flask:
 
     mongo_client = get_mongo_client()
     database = get_database(mongo_client)
+    init_db(database)
     ensure_indexes(database)
     ensure_collections(database)
 
@@ -976,6 +896,96 @@ def create_app() -> Flask:
                     }
                     for m in breakdown["merchants"]
                 ],
+            }
+        )
+
+    @api_bp.get("/transactions")
+    def list_transactions():
+        user = g.current_user
+        window_days = parse_window_days(30)
+        card_object_ids = parse_card_ids_query()
+        transactions = load_transactions(database, user["_id"], window_days, card_object_ids)
+
+        account_ids: Set[ObjectId] = set()
+        for txn in transactions:
+            account_id = txn.get("accountId")
+            if isinstance(account_id, ObjectId):
+                account_ids.add(account_id)
+            elif isinstance(account_id, str):
+                try:
+                    account_ids.add(ObjectId(account_id))
+                except Exception:
+                    continue
+
+        account_lookup: Dict[str, Dict[str, Any]] = {}
+        if account_ids:
+            for account in database["accounts"].find({"_id": {"$in": list(account_ids)}}):
+                account_lookup[str(account["_id"])] = account
+
+        total_spend = 0.0
+        rows: List[Dict[str, Any]] = []
+        for txn in transactions:
+            amount = float(txn.get("amount", 0) or 0)
+            total_spend += max(amount, 0.0)
+
+            when = txn.get("date")
+            if isinstance(when, datetime):
+                posted_at = when.isoformat().replace("+00:00", "Z")
+            else:
+                posted_at = str(when) if when else None
+
+            merchant_name = (
+                txn.get("merchant_name_norm")
+                or txn.get("merchant_name")
+                or txn.get("merchant_id")
+                or txn.get("description_clean")
+                or txn.get("description")
+                or "Merchant"
+            )
+
+            account_id = txn.get("accountId")
+            account_key = None
+            if isinstance(account_id, ObjectId):
+                account_key = str(account_id)
+            elif isinstance(account_id, str):
+                account_key = account_id
+
+            account_doc = account_lookup.get(account_key) if account_key else None
+            account_name = None
+            if account_doc:
+                account_name = (
+                    account_doc.get("nickname")
+                    or account_doc.get("issuer")
+                    or account_doc.get("account_mask")
+                )
+
+            rows.append(
+                {
+                    "id": str(txn.get("_id")),
+                    "date": posted_at,
+                    "merchantName": merchant_name,
+                    "merchantId": str(txn.get("merchant_id")) if txn.get("merchant_id") else None,
+                    "description": txn.get("description")
+                    or txn.get("description_clean")
+                    or merchant_name,
+                    "category": txn.get("category")
+                    or txn.get("category_l1")
+                    or txn.get("category_l2")
+                    or "Uncategorized",
+                    "amount": round(amount, 2),
+                    "accountId": account_key,
+                    "accountName": account_name,
+                    "status": txn.get("status"),
+                    "logoUrl": txn.get("logoUrl") or txn.get("merchant_logo"),
+                }
+            )
+
+        return jsonify(
+            {
+                "windowDays": window_days,
+                "total": round(total_spend, 2),
+                "transactionCount": len(rows),
+                "transactions": rows,
             }
         )
 
@@ -2198,6 +2208,7 @@ def create_app() -> Flask:
 
     # mount blueprint
     app.register_blueprint(api_bp)
+    app.register_blueprint(recurring_bp)
 
     return app
 
