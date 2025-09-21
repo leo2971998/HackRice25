@@ -1,8 +1,11 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo  # Py3.9+; falls back to UTC below if missing
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import random
-from datetime import datetime
 from bson import ObjectId
 from flask import Blueprint, Flask, jsonify, request, g
 from flask_cors import CORS
@@ -26,10 +29,13 @@ from services.spend import (
     compute_user_mix,
     load_transactions,
 )
+from services.insights import compare_windows, overspend_reasons, category_deep_dive
+
 from mock_transactions import generate_mock_transactions
 from db import ensure_indexes, init_db
 from routes.recurring import recurring_bp
-
+from routes.cards_best import cards_best_bp
+from routes.insight_api import insights_bp
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
@@ -86,7 +92,101 @@ DEFAULT_CASHBACK_SCENARIOS: List[Dict[str, Any]] = [
 def load_environment() -> None:
     if load_dotenv is not None:
         load_dotenv()
+def _fmt_currency(v: float) -> str:
+    try:
+        return f"${float(v):,.0f}"
+    except Exception:
+        return str(v)
 
+def _delta_to_markdown(delta: dict) -> str:
+    w = int(delta.get("windowDays", 30))
+    this_total = _fmt_currency(delta.get("this", {}).get("total", 0))
+    prior_total = _fmt_currency(delta.get("prior", {}).get("total", 0))
+    diff = float(delta.get("deltaTotal", 0) or 0)
+    sign = "▲" if diff > 0 else ("▼" if diff < 0 else "•")
+    diff_txt = _fmt_currency(abs(diff))
+    lines = [
+        f"**Spending change (last {w} days vs prior {w})**",
+        "",
+        f"- This window: **{this_total}**",
+        f"- Prior window: **{prior_total}**",
+        f"- Net change: **{sign} {diff_txt}**",
+    ]
+    movers = delta.get("topCategoryIncreases", [])
+    if movers:
+        lines.append("")
+        lines.append("**Top category increases**")
+        for r in movers[:5]:
+            lines.append(f"- **{r['name']}**: +{_fmt_currency(r['increase'])} (now { _fmt_currency(r['current']) })")
+    merchants = delta.get("topMerchantIncreases", [])
+    if merchants:
+        lines.append("")
+        lines.append("**Merchants driving the increase**")
+        for r in merchants[:5]:
+            lines.append(f"- **{r['name']}**: +{_fmt_currency(r['change'])}")
+    lines.append("")
+    lines.append("_Want to dig into a specific category or merchant?_")
+    return "\n".join(lines)
+def _category_dive_to_markdown(cat_data: dict) -> str:
+    cat = cat_data.get("category", "This category")
+    w = int(cat_data.get("windowDays", 30))
+    this_total = _fmt_currency(cat_data.get("thisTotal", 0))
+    prior_total = _fmt_currency(cat_data.get("priorTotal", 0))
+    d = float(cat_data.get("delta", 0) or 0)
+    sign = "▲" if d > 0 else ("▼" if d < 0 else "•")
+    diff_txt = _fmt_currency(abs(d))
+
+    lines = [
+        f"**{cat} — last {w} vs prior {w}**",
+        "",
+        f"- This window: **{this_total}**",
+        f"- Prior window: **{prior_total}**",
+        f"- Net change: **{sign} {diff_txt}**",
+    ]
+
+    merchants = cat_data.get("topMerchants", [])
+    if merchants:
+        lines.append("")
+        lines.append("**Top merchants**")
+        for m in merchants:
+            lines.append(f"- **{m['name']}**: { _fmt_currency(m['amount']) } ({m['count']}×)")
+
+    lines.append("")
+    lines.append("_Ask: ‘show recent transactions in this category’ or ‘best card for this category.’_")
+    return "\n".join(lines)
+
+def _budget_markdown(monthly_total: float, mix_rows: list[dict]) -> str:
+    # take your normalized mix rows (key/amount/pct) and allocate
+    if monthly_total <= 0 or not mix_rows:
+        return "I couldn't detect recent spend to base a budget on. Try again after a few transactions."
+    # build list of tuples (name, pct)
+    # mix_rows can be from aggregate_spend_details(categories) or compute_user_mix -> we expect keys "key" & "pct"
+    pairs = []
+    for r in mix_rows:
+        name = r.get("key") or r.get("name") or "Other"
+        pct = float(r.get("pct", 0) or 0)
+        if pct > 0:
+            pairs.append((str(name), pct))
+    # normalize in case they don't sum to 1
+    total_pct = sum(p for _, p in pairs) or 1.0
+    alloc = []
+    for name, pct in pairs:
+        amt = round(monthly_total * (pct / total_pct))
+        alloc.append((name, amt))
+    # limit to 6 lines + other
+    alloc.sort(key=lambda x: x[1], reverse=True)
+    top = alloc[:6]
+    residue = max(0, round(monthly_total - sum(a for _, a in top)))
+    md = [f"Based on your last **30** days, your estimated monthly spend is **{_fmt_currency(monthly_total)}**.",
+          "",
+          "Here’s a simple starting budget split by your actual spending mix:"]
+    for name, amt in top:
+        md.append(f"* **{name}**: ~{_fmt_currency(amt)}")
+    if residue > 0:
+        md.append(f"* **Other**: ~{_fmt_currency(residue)}")
+    md.append("")
+    md.append("_We can tweak any category — tell me which to raise or lower._")
+    return "\n".join(md)
 def month_bounds(month_str: Optional[str]) -> Tuple[datetime, datetime, str]:
     """
     month_str 'YYYY-MM' -> (start, end, normalized_str)
@@ -637,6 +737,10 @@ def create_app() -> Flask:
         g.current_token = payload
         g.current_user = get_or_create_user(database["users"], payload)
 
+        # NEW: make db + user_id available to ALL blueprints/endpoints
+        g.db = database
+        g.user_id = g.current_user["_id"]
+
     # Register the hook for all routes
     app.before_request(_set_current_user)
 
@@ -861,6 +965,8 @@ def create_app() -> Flask:
 
         g.current_token = claims
         g.current_user = get_or_create_user(app.config["MONGO_DB"]["users"], claims)
+        g.db = app.config["MONGO_DB"]
+        g.user_id = g.current_user["_id"]
 
 
 
@@ -1612,6 +1718,7 @@ def create_app() -> Flask:
         return jsonify({"status": "ok", "applicationId": str(result.inserted_id)}), 201
 
     # -------- chat --------
+
     @api_bp.post("/chat")
     def chat_with_finbot():
         user = g.current_user
@@ -1620,51 +1727,160 @@ def create_app() -> Flask:
         new_message = payload.get("newMessage")
         if not isinstance(new_message, str) or not new_message.strip():
             raise BadRequest("newMessage is required")
-        message_text = new_message.strip()
+        text = new_message.strip()
+        text_lc = text.lower()
 
-        history_payload = payload.get("history")
-        history: List[Dict[str, str]] = []
-        if isinstance(history_payload, list):
-            for entry in history_payload[-20:]:
-                if not isinstance(entry, dict):
-                    continue
-                author = entry.get("author")
-                content = entry.get("content")
-                if author in ("user", "assistant") and isinstance(content, str) and content.strip():
-                    history.append(
-                        {"author": author, "content": content.strip(), "timestamp": entry.get("timestamp")}
-                    )
+        # recent context for grounding
+        window_days = int(payload.get("window") or 30)
+        mix, _total_spend, _txns = compute_user_mix(app.config["MONGO_DB"], user["_id"], window_days, None)
+        llm_ctx = build_llm_context(app.config["MONGO_DB"], user["_id"], window_days)
+        monthly_total = float(llm_ctx.get("monthly_spend_estimate") or 0.0)
 
-        window_days = int(payload.get("window") or 90)
+        ts = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-        mix, _total_spend, _ = compute_user_mix(database, user["_id"], window_days, None)
-        llm_context = build_llm_context(database, user["_id"], window_days)
+        def respond(reply: str, payload_obj=None):
+            safe = reply.strip() if isinstance(reply, str) and reply.strip() else \
+                "I’m here and ready. Ask about budgets or spending changes."
+            body = {"reply": safe, "timestamp": ts}
+            if payload_obj is not None:
+                body["payload"] = payload_obj
+            return jsonify(body)
 
-        # seed recs
-        recommendations: List[Dict[str, Any]] = []
-        monthly_total = llm_context.get("monthly_spend_estimate") or (1000.0 if mix else 0.0)
+        # --------------------------
+        # 0) trivial QOL: current time
+        # --------------------------
+        if any(k in text_lc for k in ("what time", "time is it", "current time", "what's the time", "whats the time")):
+            pref_tz = (user.get("preferences") or {}).get("timezone") or "UTC"
+            try:
+                tz = ZoneInfo(pref_tz) if ZoneInfo else timezone.utc
+            except Exception:
+                tz = timezone.utc
+            now_local = datetime.now(tz)
+            pretty = now_local.strftime("%a, %b %d • %I:%M %p").lstrip("0")
+            return respond(f"The time is **{pretty}** ({pref_tz}).")
+
+        # --------------------------
+        # 1) greeting
+        # --------------------------
+        if text_lc in ("hi", "hello", "hey") or text_lc.startswith(("hi ", "hello ", "hey ")):
+            return respond("Hi! I can **suggest a monthly budget** or explain **why spending rose**. What would you like to do?")
+
+        # --------------------------
+        # 2) budget (markdown)
+        # --------------------------
+        if "budget" in text_lc or "set a budget" in text_lc or "monthly budget" in text_lc:
+            if monthly_total > 0 and llm_ctx.get("top_categories"):
+                reply = _budget_markdown(
+                    monthly_total,
+                    [{"key": c.get("name") or c.get("key"), "pct": c.get("pct", 0)} for c in llm_ctx.get("top_categories", [])],
+                )
+            else:
+                reply = "I couldn't detect recent spend to base a budget on. Try again after a few transactions."
+            return respond(reply)
+
+        # --------------------------
+        # 3) insights (markdown)
+        # --------------------------
+        if ("spending" in text_lc or "spend" in text_lc) and any(k in text_lc for k in ("rise", "increas", "up", "higher")):
+            try:
+                data = compare_windows(app.config["MONGO_DB"], user["_id"], this_window="MTD")
+                return respond(_delta_to_markdown(data))
+            except Exception as e:
+                app.logger.warning(f"insights compare failed: {e}")
+                return respond("Sorry — I couldn't fetch your insights right now.")
+
+        # --------------------------
+        # 4) CATEGORY DEEP DIVE (e.g., 'Dining', 'Groceries')
+        #    Trigger if the user sends a single category word/phrase.
+        # --------------------------
+        CAT_ALIASES = {
+            "dining": "Food and Drink",
+            "food": "Food and Drink",
+            "food & drink": "Food and Drink",
+            "food and drink": "Food and Drink",
+            "grocery": "Groceries",
+            "groceries": "Groceries",
+            "pharmacy": "Drugstores",
+            "drugstore": "Drugstores",
+            "drugstores": "Drugstores",
+            "travel": "Travel",
+            "bills": "Bills",
+            "shopping": "Shopping",
+            "entertainment": "Entertainment",
+            "transit": "Transportation",
+            "transport": "Transportation",
+            "transportation": "Transportation",
+            "home improvement": "Home Improvement",
+        }
+
+        # very light heuristic: short message that looks like a category
+        if len(text_lc) <= 30:
+            normalized = CAT_ALIASES.get(text_lc.strip(), None)
+            if normalized or text_lc in CAT_ALIASES:
+                cat = normalized or CAT_ALIASES[text_lc]
+                try:
+                    dive = category_deep_dive(app.config["MONGO_DB"], user["_id"], category_name=cat, this_window=window_days)
+                    sign = "▲" if float(dive["delta"]) > 0 else ("▼" if float(dive["delta"]) < 0 else "•")
+                    md = [
+                        f"**{cat} deep dive (last {dive['windowDays']} days vs prior {dive['windowDays']})**",
+                        "",
+                        f"- This window: **${dive['thisTotal']:,.0f}**",
+                        f"- Prior window: **${dive['priorTotal']:,.0f}**",
+                        f"- Net change: **{sign} ${abs(float(dive['delta'])):,.0f}**",
+                    ]
+                    if dive.get("topMerchants"):
+                        md.append("")
+                        md.append("**Top merchants in this category**")
+                        for m in dive["topMerchants"]:
+                            md.append(f"- **{m['name']}**: ${m['amount']:,.0f} ({m['count']} txns)")
+                    md.append("")
+                    md.append("_Ask for a specific merchant if you want me to break it down further._")
+                    return respond("\n".join(md))
+                except Exception as e:
+                    app.logger.warning(f"category deep dive failed: {e}")
+                    return respond(f"Sorry — I couldn't analyze **{cat}** right now.")
+
+        # --------------------------
+        # 5) general Q&A → LLM fallback (more robust)
+        # --------------------------
+        history = []
+        for h in (payload.get("history") or [])[-20:]:
+            if isinstance(h, dict) and h.get("author") in ("user", "assistant") and isinstance(h.get("content"), str):
+                history.append({"author": h["author"], "content": h["content"], "timestamp": h.get("timestamp")})
+
+        # lightweight recs to prime the model
+        recommendations = []
         if mix and monthly_total > 0:
-            catalog_cards = list(database["credit_cards"].find({"active": True}))
+            catalog_cards = list(app.config["MONGO_DB"]["credit_cards"].find({"active": True}))
             if catalog_cards:
                 scored = score_catalog(catalog_cards, mix, monthly_total, window_days, limit=3)
-                for card in scored[:3]:
-                    recommendations.append(
-                        {
-                            "product_name": card.get("product_name"),
-                            "issuer": card.get("issuer"),
-                            "net": card.get("net"),
-                            "slug": card.get("slug"),
-                        }
-                    )
+                for c in scored[:3]:
+                    recommendations.append({
+                        "product_name": c.get("product_name"),
+                        "issuer": c.get("issuer"),
+                        "net": c.get("net"),
+                        "slug": c.get("slug"),
+                    })
 
-        response_text = generate_chat_response(
-            user_spend_mix=mix,
-            recommendations=recommendations,
-            history=history,
-            new_message=message_text
-        )
-        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        return jsonify({"reply": response_text, "timestamp": timestamp})
+        reply_text = ""
+        try:
+            reply_text = generate_chat_response(
+                user_spend_mix=mix,
+                recommendations=recommendations,
+                history=history,
+                new_message=text,
+            )
+        except Exception as e:
+            app.logger.warning(f"LLM error: {e}")
+
+        reply_text = (reply_text or "").strip()
+        if not reply_text:
+            # Last-resort friendly fallback
+            return respond("I can help with **budgets** and **spending changes**. Try “Suggest a monthly budget” or “Why did spending rise?”")
+        return respond(reply_text)
+
+
+
 
     # -------- rewards --------
     @api_bp.get("/rewards/estimate")
@@ -2348,18 +2564,6 @@ def create_app() -> Flask:
                 "ownedRateInt": best_owned_pct_int,
             }
         )
-
-
-
-
-
-
-
-
-
-
-
-    
     @api_bp.post("/transactions/mock/generate")
     def generate_mock_for_account():
         """
@@ -2401,7 +2605,8 @@ def create_app() -> Flask:
     # mount blueprint
     app.register_blueprint(api_bp)
     app.register_blueprint(recurring_bp)
-
+    app.register_blueprint(cards_best_bp)
+    app.register_blueprint(insights_bp)
     return app
 
 
