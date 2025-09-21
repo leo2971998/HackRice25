@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, ArrowDownRight, ArrowUpRight, Minus, X, Info } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,20 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { StatTile } from "@/components/cards/StatTile"
 import { DonutChart } from "@/components/charts/DonutChart"
-import { MerchantTable } from "@/components/cards/MerchantTable"
 import { PageSection } from "@/components/layout/PageSection"
-import { DetailsTable } from "@/components/details/DetailsTable"
-import { MerchantDetailsTable } from "@/components/details/MerchantDetailsTable"
 import { RecommendationsSection } from "@/components/recommendations/RecommendationsSection"
 
-import {
-    useAccounts,
-    useMe,
-    useMerchants,
-    useSpendDetails,
-    useSpendSummary,
-} from "@/hooks/useApi"
-import { useCardCatalog } from "@/hooks/useCards"
+import { useAccounts, useMe, useSpendDetails, useSpendSummary, useTransactions } from "@/hooks/useApi"
 import type { CardRow } from "@/types/api"
 import { gradientForIssuer } from "@/utils/brand-gradient"
 
@@ -38,16 +28,15 @@ const currencyCompact = new Intl.NumberFormat(undefined, {
     notation: "compact",
     maximumFractionDigits: 1,
 })
-
 function formatCurrencyTight(n: number) {
     const abs = Math.abs(n)
     return abs >= 10_000 ? currencyCompact.format(n) : currencyLong.format(n)
 }
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
-type HomeTab = "overview" | "details" | "recommendations"
+type HomeTab = "overview" | "recommendations"
 const HOME_TABS: { id: HomeTab; label: string }[] = [
     { id: "overview", label: "Overview" },
-    { id: "details", label: "Details" },
     { id: "recommendations", label: "Recommendations" },
 ]
 
@@ -62,7 +51,7 @@ function formatLastSynced(card: CardRow) {
 
 const DETAILS_WINDOW_DAYS = 30
 
-/* ───────── glossy hero helpers (issuer/slug tinted) ───────── */
+/* ───────── helpers ───────── */
 
 function normalizeSlug(value?: string | null) {
     if (typeof value !== "string") return null
@@ -82,10 +71,14 @@ function gradientForCardRow(card?: Partial<CardRow>) {
         card?.network,
         (card as any)?.nickname,
     ]
-    return gradientForIssuer(
-        ...hints.map((hint) => (typeof hint === "string" && hint.length ? hint : undefined)),
-    )
+    return gradientForIssuer(...hints.map((hint) => (typeof hint === "string" && hint.length ? hint : undefined)))
 }
+
+function monthLabel(d = new Date()) {
+    return d.toLocaleString(undefined, { month: "long" })
+}
+
+/* ───────── components ───────── */
 
 function SingleCardHero({
                             card,
@@ -100,10 +93,6 @@ function SingleCardHero({
     const issuer = card.issuer ?? ""
     const name = (card as any)?.productName ?? card.nickname ?? "Your Card"
     const last4 = (card.mask ?? "").slice(-4) || "0000"
-    const slug =
-        normalizeSlug((card as any)?.productSlug) ??
-        normalizeSlug((card as any)?.cardProductSlug) ??
-        "—"
 
     // touch swipe
     const startRef = useRef<{ x: number; y: number } | null>(null)
@@ -159,14 +148,11 @@ function SingleCardHero({
 
                     <div className="mt-1 text-xl font-semibold leading-6 line-clamp-2">{name}</div>
 
-                    <div className="mt-auto flex items-end justify-between text-xs">
+                    {/* bottom line: only the masked card number now */}
+                    <div className="mt-auto flex items-end text-xs">
                         <div className="space-x-2 opacity-90">
                             <span>•••• •••• •••• {last4}</span>
                             <span className="hidden sm:inline">SWIPE COACH MEMBER</span>
-                        </div>
-                        <div className="text-right opacity-90">
-                            <div className="uppercase tracking-wide">Slug</div>
-                            <div className="font-semibold">{slug}</div>
                         </div>
                     </div>
                 </div>
@@ -176,19 +162,28 @@ function SingleCardHero({
     )
 }
 
-/* Compact, responsive big-number tile for 30-day spend */
-function BigSpendTile({ value }: { value: number }) {
+
+/* Wide 30-day spend card (goes on right above donut) */
+function Rolling30WideCard({ value }: { value: number }) {
     return (
-        <div className="rounded-2xl border bg-muted/40 p-4">
-            <div className="text-xs text-muted-foreground">30-day spend</div>
-            <div className="font-semibold leading-tight" style={{ fontSize: "clamp(1.25rem, 3.5vw, 2.25rem)" }}>
-                {formatCurrencyTight(value)}
-            </div>
-        </div>
+        <Card className="rounded-3xl">
+            <CardHeader className="p-5 pb-0">
+                <CardTitle className="text-lg font-semibold">Rolling 30-day spend</CardTitle>
+                <CardDescription>Last 30 days (rolling window).</CardDescription>
+            </CardHeader>
+            <CardContent className="p-5">
+                <div
+                    className="font-semibold leading-tight tabular-nums"
+                    style={{ fontSize: "clamp(1.75rem, 5vw, 3rem)" }}
+                >
+                    {formatCurrencyTight(value)}
+                </div>
+            </CardContent>
+        </Card>
     )
 }
 
-/* Simple donut legend (name – amount – %) */
+/* Donut legend */
 function DonutLegend({ data }: { data: { name: string; total: number }[] }) {
     if (!data?.length) return null
     const total = data.reduce((s, d) => s + (d.total || 0), 0) || 1
@@ -214,6 +209,178 @@ function DonutLegend({ data }: { data: { name: string; total: number }[] }) {
     )
 }
 
+/* Budget progress (reads Settings preference) */
+function BudgetProgressCard({
+                                monthSpend,
+                                monthlyBudget,
+                            }: {
+    monthSpend: number
+    monthlyBudget?: number | null
+}) {
+    const hasBudget = typeof monthlyBudget === "number" && monthlyBudget! > 0
+    const pct = hasBudget ? Math.min(1, monthSpend / (monthlyBudget as number)) : 0
+    const over = hasBudget && monthSpend > (monthlyBudget as number)
+    const monthName = monthLabel()
+
+    return (
+        <Card className="rounded-3xl">
+            <CardHeader className="p-5 pb-0">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <CardTitle className="text-lg font-semibold">Monthly budget — {monthName}</CardTitle>
+                        <CardDescription>Month-to-date vs your budget threshold.</CardDescription>
+                    </div>
+                    {!hasBudget && (
+                        <a
+                            href="/settings"
+                            className="rounded-full border px-3 py-1.5 text-sm hover:bg-muted"
+                            title="Go to Settings → Preferences to set a monthly budget"
+                        >
+                            Set budget
+                        </a>
+                    )}
+                </div>
+            </CardHeader>
+            <CardContent className="p-5 space-y-4">
+                <div className="flex items-center justify-between text-sm">
+          <span className="inline-flex items-center gap-2">
+            <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold">MTD</span>
+            <span>This month</span>
+          </span>
+                    <span className="tabular-nums">
+            {money.format(monthSpend)} {hasBudget ? ` / ${money.format(monthlyBudget as number)}` : ""}
+          </span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-muted">
+                    <div
+                        className={`h-2 rounded-full transition-all ${over ? "bg-red-500" : "bg-primary"}`}
+                        style={{ width: `${(pct * 100).toFixed(1)}%` }}
+                    />
+                </div>
+                <div className="text-xs text-muted-foreground flex items-start gap-2">
+                    <Info className="h-4 w-4 mt-0.5" />
+                    <span>
+            Monthly budget uses <strong>month-to-date</strong> spending. The “Rolling 30-day spend” card is a separate 30-day window.
+          </span>
+                </div>
+                {hasBudget && (
+                    <div className={`text-xs ${over ? "text-red-600" : "text-muted-foreground"}`}>
+                        {over
+                            ? "You're over budget for the month."
+                            : `You’ve used ${(pct * 100).toFixed(0)}% of your budget.`}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+    )
+}
+
+/* Category momentum (this month vs last month) + totals & net */
+type TxRow = { date: string; category?: string; amount: number }
+function startOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth(), 1) }
+function endOfMonth(d = new Date()) { return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999) }
+function inRange(iso: string, from: Date, to: Date) { const t = new Date(iso).getTime(); return t >= from.getTime() && t <= to.getTime() }
+function sumByCategory(rows: TxRow[]) {
+    const m = new Map<string, number>()
+    for (const r of rows) {
+        const cat = r.category || "Uncategorized"
+        m.set(cat, (m.get(cat) || 0) + Math.max(0, r.amount || 0))
+    }
+    return m
+}
+function CategoryMomentumCard({ txs }: { txs: TxRow[] }) {
+    const now = new Date()
+    const thisFrom = startOfMonth(now)
+    const thisTo = endOfMonth(now)
+    const last = new Date(now.getFullYear(), now.getMonth() - 1, 15)
+    const lastFrom = startOfMonth(last)
+    const lastTo = endOfMonth(last)
+
+    const thisMonth = txs.filter((t) => inRange(t.date, thisFrom, thisTo))
+    const lastMonth = txs.filter((t) => inRange(t.date, lastFrom, lastTo))
+
+    const thisMap = sumByCategory(thisMonth)
+    const lastMap = sumByCategory(lastMonth)
+
+    const cats = new Set([...thisMap.keys(), ...lastMap.keys()])
+    const rows = Array.from(cats).map((c) => {
+        const a = thisMap.get(c) || 0
+        const b = lastMap.get(c) || 0
+        const delta = a - b
+        const deltaPct = b > 0 ? delta / b : (a > 0 ? 1 : 0)
+        return { category: c, thisMonth: a, lastMonth: b, delta, deltaPct }
+    })
+    rows.sort((x, y) => y.thisMonth - x.thisMonth)
+
+    const totalThis = Array.from(thisMap.values()).reduce((s, v) => s + v, 0)
+    const totalLast = Array.from(lastMap.values()).reduce((s, v) => s + v, 0)
+    const net = totalThis - totalLast
+    const netPct = totalLast > 0 ? net / totalLast : (totalThis > 0 ? 1 : 0)
+    const netTone = net === 0 ? "text-muted-foreground" : net > 0 ? "text-red-600" : "text-emerald-600"
+    const netLabel = net > 0 ? "Loss / Increase" : net < 0 ? "Savings / Decrease" : "No change"
+
+    return (
+        <Card className="rounded-3xl">
+            <CardHeader className="p-5 pb-0">
+                <CardTitle className="text-lg font-semibold">Category momentum</CardTitle>
+                <CardDescription>This month vs last month.</CardDescription>
+            </CardHeader>
+            <CardContent className="p-5">
+                <div className="overflow-x-auto rounded-2xl border">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-muted/50">
+                        <tr>
+                            <th className="p-3 text-left">Category</th>
+                            <th className="p-3 text-right">This month</th>
+                            <th className="p-3 text-right">Last month</th>
+                            <th className="p-3 text-right">Δ</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {rows.length === 0 ? (
+                            <tr><td className="p-4" colSpan={4}>No data yet.</td></tr>
+                        ) : rows.slice(0, 8).map((r) => {
+                            const Icon = r.delta === 0 ? Minus : r.delta > 0 ? ArrowUpRight : ArrowDownRight
+                            const tone = r.delta === 0 ? "text-muted-foreground" : r.delta > 0 ? "text-red-600" : "text-emerald-600"
+                            return (
+                                <tr key={r.category} className="border-t">
+                                    <td className="p-3">{r.category}</td>
+                                    <td className="p-3 text-right tabular-nums">{money.format(r.thisMonth)}</td>
+                                    <td className="p-3 text-right tabular-nums">{money.format(r.lastMonth)}</td>
+                                    <td className={`p-3 text-right tabular-nums ${tone}`}>
+                    <span className="inline-flex items-center gap-1 justify-end">
+                      <Icon className="h-4 w-4" />
+                        {money.format(Math.abs(r.delta))}{" "}
+                        <span className="text-xs">({Math.abs(r.deltaPct * 100).toFixed(0)}%)</span>
+                    </span>
+                                    </td>
+                                </tr>
+                            )
+                        })}
+                        </tbody>
+                        <tfoot className="bg-muted/30">
+                        <tr className="border-t">
+                            <td className="p-3 font-semibold">Totals</td>
+                            <td className="p-3 text-right font-semibold tabular-nums">{money.format(totalThis)}</td>
+                            <td className="p-3 text-right font-semibold tabular-nums">{money.format(totalLast)}</td>
+                            <td className={`p-3 text-right font-semibold tabular-nums ${netTone}`}>
+                                {money.format(Math.abs(net))}{" "}
+                                <span className="text-xs">({Math.abs(netPct * 100).toFixed(0)}%)</span>
+                            </td>
+                        </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <div className={`mt-3 text-sm ${netTone}`}>
+                    Net change vs last month: {net >= 0 ? "+" : "−"}
+                    {money.format(Math.abs(net))} ({Math.abs(netPct * 100).toFixed(0)}%) — {netLabel}
+                </div>
+            </CardContent>
+        </Card>
+    )
+}
+
 /* ───────── main page ───────── */
 
 export function HomePage() {
@@ -233,28 +400,17 @@ export function HomePage() {
     // data hooks
     const summary = useSpendSummary(DETAILS_WINDOW_DAYS, { cardIds: filterCardIds, enabled: queryEnabled })
     const spendDetails = useSpendDetails(DETAILS_WINDOW_DAYS, { cardIds: filterCardIds, enabled: queryEnabled })
-    const merchants = useMerchants(
-        { limit: 8, windowDays: DETAILS_WINDOW_DAYS, cardIds: filterCardIds ?? undefined },
-        { enabled: queryEnabled },
-    )
-    const catalog = useCardCatalog({ active: true })
 
-    // computed
-    const stats = summary.data?.stats ?? { totalSpend: 0, txns: 0, accounts: 0 }
-    const categories = summary.data?.byCategory ?? []
-    const topCategories = categories.slice(0, 6)
-    const merchantRows = merchants.data ?? []
-
-    const detailData = spendDetails.data
-    const detailCategories = detailData?.categories ?? []
-    const detailMerchants = detailData?.merchants ?? []
-    const detailTotal = detailData?.total ?? 0
-    const detailTransactions = detailData?.transactionCount ?? 0
+    // for month-to-date + last-month comparison, pull ~62 days and compute client-side
+    const daysBack = 62
+    const txQuery = useTransactions({ windowDays: daysBack, cardIds: filterCardIds }, { enabled: queryEnabled })
 
     const greeting = me?.name?.trim() || (me?.email ? me.email.split("@")[0] : "there")
 
-    // selection utilities
+    // tabs
     const [activeTab, setActiveTab] = useState<HomeTab>("overview")
+
+    // selection utilities
     const switchToSingle = () => { setMode("single"); setSelectedCardIds([]) }
     const switchToMulti = () => { setMode("multi"); setSelectedCardId(undefined) }
 
@@ -297,14 +453,38 @@ export function HomePage() {
         setSelectedCardIds((prev) => (prev.includes(cardId) ? prev.filter((id) => id !== cardId) : [...prev, cardId]))
     }
 
+    // summary bits (rolling 30d tiles + donut)
+    const stats = summary.data?.stats ?? { totalSpend: 0, txns: 0, accounts: 0 }
+    const donutData = summary.data ? (summary.data.byCategory ?? []).slice(0, 6) : []
+
+    // details for recommendations
+    const detailData = spendDetails.data
+    const detailCategories = detailData?.categories ?? []
+    const detailTotal = detailData?.total ?? 0
+
+    // month-to-date spend from txs
+    const mtdSpend = useMemo(() => {
+        const txs = txQuery.data?.transactions ?? []
+        const from = startOfMonth(new Date())
+        const to = endOfMonth(new Date())
+        let sum = 0
+        for (const t of txs) {
+            if (!t?.date) continue
+            if (inRange(t.date, from, to)) sum += Math.max(0, t.amount || 0)
+        }
+        return sum
+    }, [txQuery.data?.transactions])
+
+    const monthlyBudget = me?.preferences?.budgets?.monthlyTotal
+
     return (
         <div className="mx-auto max-w-7xl px-5 md:px-8 lg:px-10 space-y-8 md:space-y-10">
             <PageSection
                 title={`Welcome back, ${greeting}`}
-                description={`Here’s what’s been happening across your wallet over the last ${DETAILS_WINDOW_DAYS} days.`}
+                description={`Here’s what’s been happening across your wallet.`}
             />
 
-            {/* Tabs always visible */}
+            {/* Tabs */}
             <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex gap-2 rounded-full border border-border/60 bg-white/80 p-1.5 text-sm shadow-sm backdrop-blur dark:bg-zinc-900/60">
                     {HOME_TABS.map((tab) => {
@@ -349,7 +529,7 @@ export function HomePage() {
                 </div>
             </div>
 
-            {/* Tabs content */}
+            {/* Content */}
             {activeTab === "overview" ? (
                 <div className="space-y-6">
                     {/* MULTI selector */}
@@ -375,127 +555,82 @@ export function HomePage() {
                         </Card>
                     )}
 
-                    {/* Main grid: hero+stats | donut+top merchants */}
-                    <div className="grid gap-6 lg:grid-cols-2">
-                        {/* LEFT: Selected card hero + compact stats */}
-                        <Card className="rounded-3xl">
-                            <CardHeader className="p-5 pb-0">
-                                <CardTitle className="text-lg font-semibold">
-                                    {mode === "single" ? "Selected card" : "Selection"}
-                                </CardTitle>
-                                <CardDescription>
-                                    {mode === "single"
-                                        ? "Swipe or use side arrows to switch cards."
-                                        : selectedCardIds.length
-                                            ? `${selectedCardIds.length} card${selectedCardIds.length > 1 ? "s" : ""} selected`
-                                            : "No cards selected"}
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="p-5 space-y-4">
-                                {mode === "single" ? (
-                                    accounts.isLoading ? (
-                                        <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Loading card…</div>
-                                    ) : !accountRows.length || currentIndex < 0 ? (
-                                        <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">No cards yet.</div>
-                                    ) : (
-                                        <>
-                                            <SingleCardHero card={accountRows[currentIndex]} onPrev={goPrev} onNext={goNext} />
-
-                                            {/* First row: two small tiles */}
-                                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                                <StatTile label="Transactions" value={(hasSelection ? stats.txns : 0).toLocaleString()} />
-                                                <StatTile label="Active cards" value={(hasSelection ? stats.accounts : 0).toString()} />
-                                            </div>
-
-                                            {/* Second row: wide spend tile */}
-                                            <BigSpendTile value={hasSelection ? stats.totalSpend : 0} />
-                                        </>
-                                    )
-                                ) : (
-                                    <>
-                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                            <StatTile label="Transactions" value={(hasSelection ? stats.txns : 0).toLocaleString()} />
-                                            <StatTile label="Active cards" value={(hasSelection ? stats.accounts : 0).toString()} />
-                                        </div>
-                                        <BigSpendTile value={hasSelection ? stats.totalSpend : 0} />
-                                    </>
-                                )}
-                            </CardContent>
-                        </Card>
-
-                        {/* RIGHT: Spending mix + Top merchants */}
-                        <div className="space-y-6">
+                    {/* Grid: 12 cols for clean balance */}
+                    <div className="grid gap-6 lg:grid-cols-12">
+                        {/* Left: Hero (span 7) with compact stats strip below */}
+                        <div className="lg:col-span-7 space-y-6">
                             <Card className="rounded-3xl">
                                 <CardHeader className="p-5 pb-0">
-                                    <CardTitle className="text-lg font-semibold">Spending mix</CardTitle>
-                                    <CardDescription>Top categories from the last {DETAILS_WINDOW_DAYS} days.</CardDescription>
+                                    <CardTitle className="text-lg font-semibold">
+                                        {mode === "single" ? "Selected card" : "Selection"}
+                                    </CardTitle>
+                                    <CardDescription>
+                                        {mode === "single"
+                                            ? "Swipe or use side arrows to switch cards."
+                                            : selectedCardIds.length
+                                                ? `${selectedCardIds.length} card${selectedCardIds.length > 1 ? "s" : ""} selected`
+                                                : "No cards selected"}
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="p-5 space-y-4">
+                                    {mode === "single" ? (
+                                        accounts.isLoading ? (
+                                            <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Loading card…</div>
+                                        ) : !accountRows.length || currentIndex < 0 ? (
+                                            <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">No cards yet.</div>
+                                        ) : (
+                                            <SingleCardHero card={accountRows[currentIndex]} onPrev={goPrev} onNext={goNext} />
+                                        )
+                                    ) : (
+                                        <div className="text-sm text-muted-foreground">Filter selection is active.</div>
+                                    )}
+                                </CardContent>
+                            </Card>
+
+                            {/* Compact stats strip (no 30-day spend here now) */}
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <StatTile label="Transactions (30d)" value={summary.data ? summary.data.stats.txns.toLocaleString() : "0"} />
+                                <StatTile label="Active cards" value={summary.data ? String(summary.data.stats.accounts) : "0"} />
+                            </div>
+
+                            <CategoryMomentumCard txs={(txQuery.data?.transactions ?? []).map(t => ({
+                                date: t.date,
+                                category: t.category,
+                                amount: t.amount,
+                            }))} />
+                        </div>
+
+                        {/* Right: Budget → Rolling 30d (wide) → Donut */}
+                        <div className="lg:col-span-5 space-y-6">
+                            <BudgetProgressCard monthSpend={mtdSpend} monthlyBudget={monthlyBudget} />
+
+                            <Rolling30WideCard value={summary.data ? summary.data.stats.totalSpend : 0} />
+
+                            <Card className="rounded-3xl">
+                                <CardHeader className="p-5 pb-0">
+                                    <CardTitle className="text-lg font-semibold">Spending mix (top categories)</CardTitle>
+                                    <CardDescription>Rolling 30-day view.</CardDescription>
                                 </CardHeader>
                                 <CardContent className="p-5">
                                     <div className="h-64">
                                         <DonutChart
-                                            data={hasSelection ? topCategories : []}
-                                            isLoading={hasSelection && summary.isLoading}
+                                            data={donutData}
+                                            isLoading={summary.isLoading && hasSelection}
                                             emptyMessage={hasSelection ? "No spending yet in this window." : "Select a card to see categories."}
                                         />
                                     </div>
-                                    {hasSelection && !summary.isLoading ? <DonutLegend data={topCategories} /> : null}
-                                </CardContent>
-                            </Card>
-
-                            <Card className="rounded-3xl">
-                                <CardHeader className="p-5 pb-0">
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <CardTitle className="text-lg font-semibold">Top merchants</CardTitle>
-                                            <CardDescription>Most active in the last {DETAILS_WINDOW_DAYS} days.</CardDescription>
-                                        </div>
-                                        {(merchantRows.length > 2) && (
-                                            <Button variant="outline" size="sm" onClick={() => setActiveTab("details")}>
-                                                Full details
-                                            </Button>
-                                        )}
-                                    </div>
-                                </CardHeader>
-                                <CardContent className="p-5">
-                                    {/* Modern thin scrollbar via tailwind-scrollbar */}
-                                    <div className="overflow-x-auto overscroll-contain scroll-smooth rounded-2xl scrollbar-thin scrollbar-thumb-muted-foreground/30 hover:scrollbar-thumb-muted-foreground/50 scrollbar-track-transparent scrollbar-corner-transparent">
-                                        <div className="min-w-[560px]">
-                                            <MerchantTable
-                                                merchants={hasSelection ? merchantRows.slice(0, 2) : []}
-                                                isLoading={hasSelection && merchants.isLoading}
-                                            />
-                                        </div>
-                                    </div>
+                                    {donutData?.length ? <DonutLegend data={donutData} /> : null}
                                 </CardContent>
                             </Card>
                         </div>
                     </div>
                 </div>
-            ) : activeTab === "details" ? (
-                <div className="grid gap-6 lg:grid-cols-12">
-                    <div className="lg:col-span-8">
-                        <DetailsTable
-                            data={hasSelection ? detailCategories : []}
-                            total={hasSelection ? detailTotal : 0}
-                            windowDays={DETAILS_WINDOW_DAYS}
-                            transactionCount={hasSelection ? detailTransactions : 0}
-                            isLoading={hasSelection && spendDetails.isLoading}
-                        />
-                    </div>
-                    <div className="lg:col-span-4">
-                        <MerchantDetailsTable
-                            data={hasSelection ? detailMerchants : []}
-                            isLoading={hasSelection && spendDetails.isLoading}
-                        />
-                    </div>
-                </div>
             ) : (
                 <RecommendationsSection
-                    categories={hasSelection ? detailCategories : []}
-                    total={hasSelection ? detailTotal : 0}
+                    categories={detailCategories}
+                    total={detailTotal}
                     windowDays={DETAILS_WINDOW_DAYS}
-                    isLoadingDetails={hasSelection && spendDetails.isLoading}
-                    catalogSize={catalog.data?.length}
+                    isLoadingDetails={spendDetails.isLoading && hasSelection}
                 />
             )}
         </div>

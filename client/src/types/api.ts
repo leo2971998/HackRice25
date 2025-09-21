@@ -1,9 +1,13 @@
 export type Preferences = {
-  timezone: string
-  currency: string
-  theme: "light" | "dark" | "system"
-  privacy: { blurAmounts: boolean }
-  notifications: { monthly_summary: boolean; new_recommendation: boolean }
+    timezone: string
+    currency: string
+    theme: "system" | "light" | "dark"
+    privacy: { blurAmounts: boolean }
+    notifications: { monthly_summary: boolean; new_recommendation: boolean }
+    budgets?: {
+        monthlyTotal?: number | null
+        byCategory?: Record<string, number>
+    }
 }
 
 export type Me = {
