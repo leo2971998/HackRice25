@@ -13,7 +13,6 @@ function normalizeSlug(value?: string | null) {
     const trimmed = value.trim()
     return trimmed.length ? trimmed : null
 }
-
 export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayProps) {
     const gradient = gradientForIssuer(
         (card as any)?.cardProductSlug,
@@ -21,18 +20,18 @@ export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayP
         card.issuer,
         (card as any)?.productName,
         card.network,
-    )
+    );
 
-    const issuer = (card.issuer ?? "").toUpperCase()
-    const name = (card as any)?.productName ?? card.nickname ?? "Your Card"
-    const last4 = (card.mask ?? "").slice(-4) || "0000"
+    const issuer = (card.issuer ?? "").toUpperCase();
+    const name = (card as any)?.productName ?? card.nickname ?? "Your Card";
+    const last4 = (card.mask ?? "").slice(-4) || "0000";
 
     // Use the helper so it isn’t “declared and never used”
     const slug =
         normalizeSlug((card as any)?.cardProductSlug) ||
         normalizeSlug((card as any)?.productSlug)
 
-    const justify = showSlug ? "justify-between" : "justify-start"
+    const justify = showSlug ? "justify-between" : "justify-start";
 
     return (
         <div className="relative overflow-hidden rounded-3xl">
@@ -69,5 +68,5 @@ export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayP
             </div>
             <div className="absolute inset-0 -z-10 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.35)]" />
         </div>
-    )
+    );
 }
