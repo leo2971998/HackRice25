@@ -1,4 +1,5 @@
 // src/hooks/useBudgetPreferences.ts
+import { useMemo } from "react"
 import { useMe, useUpdateMe } from "@/hooks/useApi"
 
 /**
@@ -20,31 +21,23 @@ export function useBudgetPreferences() {
     const { data: me } = useMe()
     const updateMe = useUpdateMe()
 
-    const prefs: BudgetsPrefs = me?.preferences?.budgets ?? {}
+    const prefs: BudgetPrefs = useMemo(() => {
+        const prefRoot = (me.data?.preferences as any) ?? {}
+        // Read from the canonical key first; fall back to legacy shapes if they exist
+        const source =
+            prefRoot.budget_prefs ??  // <— new canonical home for config
+            prefRoot.budget ??        // legacy singular
+            prefRoot.budgets_pref ??  // possible earlier variant
+            {}                        // NOTE: prefRoot.budgets is NOT prefs (that’s summary data)
+        return { ...DEFAULT, ...(source ?? {}) }
+    }, [me.data?.preferences])
 
-    /** Set the global monthly budget total (or null to unset). */
-    const setMonthlyTotal = (value: number | null) => {
+    // Always write to the canonical key `budget_prefs`.
+    // Cast to `any` to avoid fighting the current Preferences type.
+    const save = (patch: Partial<BudgetPrefs>) =>
         updateMe.mutate({
-            preferences: {
-                budgets: {
-                    ...prefs,
-                    monthlyTotal: value,
-                },
-            },
+            preferences: { budget_prefs: { ...prefs, ...patch } } as any,
         })
-    }
-
-    /** Replace (or extend) the per-category budget map. */
-    const setByCategory = (map: Record<string, number>) => {
-        updateMe.mutate({
-            preferences: {
-                budgets: {
-                    ...prefs,
-                    byCategory: { ...(prefs.byCategory ?? {}), ...map },
-                },
-            },
-        })
-    }
 
     /** Set multiple keys in one go; only accepts the canonical keys. */
     const patchBudgets = (patch: Partial<BudgetsPrefs>) => {

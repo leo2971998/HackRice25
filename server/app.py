@@ -275,16 +275,19 @@ def check_and_notify_budget(db, user, month_str: str) -> Dict[str, any]:
     }
 
 def get_auth_settings() -> Dict[str, str]:
-    domain = os.environ.get("AUTH0_DOMAIN")
-    audience = os.environ.get("AUTH0_AUDIENCE")
+    domain = (os.environ.get("AUTH0_DOMAIN") or "").strip().rstrip("/")
+    audience = (os.environ.get("AUTH0_AUDIENCE") or "").strip()
     if not domain or not audience:
         raise RuntimeError("AUTH0_DOMAIN and AUTH0_AUDIENCE must be set")
-    issuer = f"https://{domain}/"
+
+    issuer = f"https://{domain}/"                       # Auth0 'iss' ends with slash
+    jwks_url = f"https://{domain}/.well-known/jwks.json"  # <- no double slash
+
     return {
         "domain": domain,
         "audience": audience,
         "issuer": issuer,
-        "jwks_url": f"{issuer}.well-known/jwks.json",
+        "jwks_url": jwks_url,
     }
 
 
@@ -336,8 +339,10 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
     if not auth_header.lower().startswith("bearer "):
         raise Unauthorized("Authorization header must start with Bearer")
     token = auth_header.split()[1]
+
     jwks = get_jwks(settings["jwks_url"])
     rsa_key = get_rsa_key(token, jwks)
+
     try:
         return jwt.decode(
             token,
@@ -345,8 +350,9 @@ def decode_token(settings: Dict[str, str]) -> Dict[str, Any]:
             algorithms=["RS256"],
             audience=settings["audience"],
             issuer=settings["issuer"],
+            options={"leeway": 10},  # tolerate minor clock skew
         )
-    except JWTError as exc:  # pragma: no cover - runtime validation
+    except JWTError as exc:
         raise Unauthorized(f"Token verification failed: {exc}")
 
 
@@ -713,15 +719,19 @@ def create_app() -> Flask:
         DISABLE_AUTH=disable_auth,
     )
 
-    def _set_current_user():
+    @app.before_request
+    def set_current_user():
         """Populate g.current_user for ALL routes (blueprint or not)."""
-    # Always let CORS preflight through
+
+        # Always let CORS preflight through
         if request.method == "OPTIONS":
             return ("", 204)
 
         # If already set (by another hook), do nothing
         if getattr(g, "current_user", None) is not None:
             return
+
+        database = app.config["MONGO_DB"]
 
         if app.config.get("DISABLE_AUTH", False):
             # Local dev user
@@ -732,18 +742,34 @@ def create_app() -> Flask:
                 "name": "Dev User",
             }
         else:
-            payload = decode_token(app.config["AUTH_SETTINGS"])
+            settings = app.config["AUTH_SETTINGS"]
+            # Decode and validate RS256 token for your API audience
+            payload = decode_token(settings)
+
+            # Best-effort: enrich missing profile fields via /userinfo
+            try:
+                if not payload.get("email"):
+                    auth_header = request.headers.get("Authorization", "")
+                    token = auth_header.split()[1] if auth_header.lower().startswith("bearer ") else None
+                    if token:
+                        ui = requests.get(
+                            f"https://{settings['domain']}/userinfo",
+                            headers={"Authorization": f"Bearer {token}"},
+                            timeout=5,
+                        )
+                        if ui.ok:
+                            profile = ui.json()
+                            payload.setdefault("email", profile.get("email"))
+                            payload.setdefault("email_verified", profile.get("email_verified"))
+                            if profile.get("name"):
+                                payload.setdefault("name", profile["name"])
+            except Exception as e:
+                app.logger.debug(f"/userinfo enrich failed: {e}")
 
         g.current_token = payload
         g.current_user = get_or_create_user(database["users"], payload)
-
-        # NEW: make db + user_id available to ALL blueprints/endpoints
         g.db = database
         g.user_id = g.current_user["_id"]
-
-    # Register the hook for all routes
-    app.before_request(_set_current_user)
-
 
 # ---------- Normalizers & maps ----------
     def normalize_transactions(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -2082,7 +2108,7 @@ def create_app() -> Flask:
     @api_bp.post("/cards")
     def add_card():
         user = g.current_user
-        payload = request.get_json(silent=True) or {}
+        payload = request.get_json(force=True, silent=True) or {}
 
         required_fields = ["issuer", "network", "mask", "expiry_month", "expiry_year"]
         mapped_payload = {

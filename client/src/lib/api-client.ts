@@ -1,91 +1,83 @@
-// client/src/lib/api-client.ts
-import { apiConfig } from "@/lib/env"
+// src/lib/api-client.ts
+type TokenGetter = () => Promise<string | null> | string | null
 
-/**
- * Optional auth token provider (e.g., from Auth0 hook).
- * Call setAccessTokenProvider(() => getAccessTokenSilently()) during app bootstrap.
- */
-let tokenGetter: (() => Promise<string | null>) | null = null
+let tokenGetter: TokenGetter | null = null
 
-export function setAccessTokenProvider(getter: (() => Promise<string | null>) | null) {
+export function registerTokenGetter(getter: TokenGetter) {
     tokenGetter = getter
 }
 
-// Alias some code might already import
-export const setTokenGetter = setAccessTokenProvider
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(/\/$/, "")
 
-// Normalize base URL (e.g. http://localhost:8000/api)
-const API_BASE_URL = (apiConfig.baseUrl ?? "").replace(/\/$/, "")
-
-/** Build an absolute URL from a path or passthrough absolute URL */
-function buildUrl(path: string): string {
+function makeUrl(path: string) {
     if (/^https?:\/\//i.test(path)) return path
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`
-    return `${API_BASE_URL}${normalizedPath}`
+    return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`
 }
 
-type Options = RequestInit & { body?: any }
+async function getToken(): Promise<string | null> {
+    try {
+        const v = tokenGetter?.()
+        return v instanceof Promise ? await v : (v ?? null)
+    } catch {
+        return null
+    }
+}
 
-/**
- * Fetch wrapper:
- * - Adds Accept + (auto) Content-Type: application/json
- * - Auto-stringifies plain object bodies
- * - Adds Authorization if tokenGetter is provided
- * - Parses JSON when present, throws Error with server message on failures
- * - Sends credentials by default ("include")
- */
-export async function apiFetch<T>(path: string, init: Options = {}): Promise<T> {
-    const headers = new Headers(init.headers ?? {})
-    headers.set("Accept", "application/json")
+export type ApiError = Error & {
+    status?: number
+    body?: unknown
+}
 
-    let body = init.body
+function buildError(status: number, body: unknown, fallbackMsg?: string): ApiError {
+    const msg =
+        (typeof body === "object" && body && "message" in body && typeof (body as any).message === "string"
+            ? (body as any).message
+            : typeof body === "string"
+                ? body
+                : fallbackMsg) || `Request failed with status ${status}`
 
-    // Auto-JSON for plain objects (not FormData / Blob / string)
-    const isPlainObject =
-        body &&
-        typeof body === "object" &&
-        !(body instanceof FormData) &&
-        !(body instanceof Blob) &&
-        !(body instanceof ArrayBuffer)
+    const err = new Error(msg) as ApiError
+    err.status = status
+    err.body = body
+    return err
+}
 
-    if (isPlainObject) {
-        if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json")
-        body = JSON.stringify(body)
+export async function apiFetch<T = unknown>(
+    path: string,
+    options: RequestInit = {}
+): Promise<T> {
+    const url = makeUrl(path)
+
+    const headers = new Headers(options.headers || {})
+    const hasBody = options.body != null
+
+    if (hasBody && !headers.has("Content-Type") && !(options.body instanceof FormData)) {
+        headers.set("Content-Type", "application/json")
     }
 
-    // Attach bearer token if available
-    if (tokenGetter) {
-        try {
-            const token = await tokenGetter()
-            if (token) headers.set("Authorization", `Bearer ${token}`)
-        } catch {
-            // ignore token errors; request can proceed unauthenticated if server allows
-        }
+    const token = await getToken()
+    if (token && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${token}`)
     }
 
-    const res = await fetch(buildUrl(path), {
-        ...init,
+    const resp = await fetch(url, {
+        method: options.method ?? (hasBody ? "POST" : "GET"),
+        credentials: options.credentials ?? "include",
+        ...options,
         headers,
-        body,
-        credentials: init.credentials ?? "include",
     })
 
-    // No content
-    if (res.status === 204) return undefined as T
-
-    const contentType = res.headers.get("Content-Type") || ""
-    const isJson = contentType.includes("application/json")
-
-    const payload = isJson ? await res.json().catch(() => undefined) : await res.text().catch(() => "")
-
-    if (!res.ok) {
-        // Prefer server-provided message
-        const msg =
-            (isJson && payload && (payload.message || payload.error || payload.detail)) ||
-            (typeof payload === "string" && payload) ||
-            `Request failed with status ${res.status}`
-        throw new Error(String(msg))
+    const text = await resp.text()
+    let data: any = undefined
+    try {
+        data = text ? JSON.parse(text) : undefined
+    } catch {
+        data = text
     }
 
-    return (isJson ? payload : (undefined as T)) as T
+    if (!resp.ok) {
+        throw buildError(resp.status, data, resp.statusText)
+    }
+
+    return data as T
 }

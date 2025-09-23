@@ -1,75 +1,52 @@
-import { useEffect } from "react"
-import type { PropsWithChildren } from "react"
-import { Auth0Provider, useAuth0 } from "@auth0/auth0-react"
+// client/src/lib/auth0-provider.tsx
+import type { ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
-
+import { Auth0Provider, useAuth0 } from "@auth0/auth0-react"
 import { authConfig } from "@/lib/env"
-import { setAccessTokenProvider } from "@/lib/api-client"
+import { registerTokenGetter } from "@/lib/api-client"
 
 function TokenBridge() {
-  const { getAccessTokenSilently, isAuthenticated } = useAuth0()
+    const { getAccessTokenSilently } = useAuth0()
 
-  useEffect(() => {
-    const authorizationParams: Record<string, string> = {}
-    if (authConfig.audience) {
-      authorizationParams.audience = authConfig.audience
-    }
-
-    setAccessTokenProvider(async () => {
-      if (!isAuthenticated) {
-        return null
-      }
-      return getAccessTokenSilently({ authorizationParams })
+    // Register synchronously so queries have a token on first run
+    registerTokenGetter(async () => {
+        const audience = authConfig.audience?.trim()
+        if (audience) {
+            // Auth0 React SDK v2 signature
+            return await getAccessTokenSilently({
+                authorizationParams: { audience },
+            })
+        }
+        // No audience (e.g., DISABLE_AUTH=1 local), just get an OIDC token
+        return await getAccessTokenSilently()
     })
 
-    return () => {
-      setAccessTokenProvider(null)
-    }
-  }, [getAccessTokenSilently, isAuthenticated])
-
-  return null
+    return null
 }
 
-function DevAuthProvider({ children }: PropsWithChildren) {
-  useEffect(() => {
-    setAccessTokenProvider(async () => null)
-    return () => {
-      setAccessTokenProvider(null)
-    }
-  }, [])
+export function Auth0ProviderWithNavigate({ children }: { children?: ReactNode }) {
+    const navigate = useNavigate()
+    const audience = authConfig.audience?.trim()
 
-  return <>{children}</>
-}
-
-export function Auth0ProviderWithNavigate({ children }: PropsWithChildren) {
-  const navigate = useNavigate()
-  const redirectUri = window.location.origin
-  const authorizationParams: Record<string, string> = {
-    redirect_uri: redirectUri,
-  }
-
-  if (authConfig.audience) {
-    authorizationParams.audience = authConfig.audience
-  }
-
-  if (authConfig.disableAuth) {
-    return <DevAuthProvider>{children}</DevAuthProvider>
-  }
-
-  return (
-    <Auth0Provider
-      domain={authConfig.domain}
-      clientId={authConfig.clientId}
-      authorizationParams={authorizationParams}
-      onRedirectCallback={(appState) => {
-        const target = appState?.returnTo ?? window.location.pathname
-        navigate(target, { replace: true })
-      }}
-      cacheLocation="localstorage"
-      useRefreshTokens
-    >
-      <TokenBridge />
-      {children}
-    </Auth0Provider>
-  )
+    return (
+        <Auth0Provider
+            domain={authConfig.domain}
+            clientId={authConfig.clientId}
+            authorizationParams={{
+                redirect_uri: window.location.origin,
+                scope: "openid profile email",
+                ...(audience ? { audience } : {}), // only include when present
+            }}
+            cacheLocation="localstorage"
+            useRefreshTokens
+            useRefreshTokensFallback
+            onRedirectCallback={(appState) => {
+                const to = appState?.returnTo || window.location.pathname
+                navigate(to)
+            }}
+        >
+            <TokenBridge />
+            {children}
+        </Auth0Provider>
+    )
 }

@@ -209,7 +209,9 @@ export default function CardsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardRowType | null>(null);
-  const [, setSelectedScenarioId] = useState<string | null>(null);
+  const [, setSelectedScenarioId] = useState<string | null>(
+    null
+  );
 
   const slugForEstimate = normalizeSlug(
     (cardDetails.data as any)?.cardProductSlug ??
@@ -235,7 +237,6 @@ export default function CardsPage() {
                 : (scenarios[0].id as string)
         );
     }, [cardDetails.data?.id, scenarioCount]);
-
 
   const effectiveLabel = rewardsEstimate.data
     ? `${percent1.format(rewardsEstimate.data.effectiveRate)} effective`

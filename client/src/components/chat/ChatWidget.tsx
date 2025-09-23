@@ -26,7 +26,7 @@ import {
 } from "@/lib/flow-coach"
 import type { ChatMessage, MandateAttachment, Mandate } from "@/types/api"
 
-import { ChatBestCard } from "./renderers/ChatBestcard";
+import { ChatBestCard } from "./renderers/ChatBestcard"
 import { ChatInsights } from "./renderers/ChatInsights"
 // at top of ChatWidget.tsx
 import ReactMarkdown from "react-markdown"

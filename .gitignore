@@ -2,7 +2,6 @@
 /.vite
 /.idea
 /server/venv
-.vite/deps/_metadata.json
-.vite/deps/_metadata.json
-/.vite
-/.vite
+client/.firebase/hosting.ZGlzdA.cache
+client/.firebaserc
+client/firebase.json

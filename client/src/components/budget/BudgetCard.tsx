@@ -65,6 +65,7 @@ export function BudgetCard({ cardIds }: { cardIds?: string[] }) {
     // Normalize limit from either schema
     const limit = normalizeLimit((budget as any).prefs ?? {})
     const projected = mtdDays > 0 ? (spendMTD / mtdDays) * dim : 0
+    const limit = prefs.monthly_limit ?? 0
     const over = limit > 0 && projected > limit
     const safePerDay = limit > 0 ? Math.max(0, (limit - spendMTD) / (dim - mtdDays || 1)) : 0
 

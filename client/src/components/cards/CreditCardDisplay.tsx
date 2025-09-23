@@ -1,11 +1,18 @@
-import type { CardRow } from "@/types/api";
-import { gradientForIssuer } from "@/utils/brand-gradient";
+// src/components/cards/CreditCardDisplay.tsx
+import { gradientForIssuer } from "@/utils/brand-gradient"
+import type { CardRow } from "@/types/api"
 
 type CreditCardDisplayProps = {
-    card: CardRow;
-    showSlug?: boolean;
-};
+    card: CardRow
+    holderName?: string | null
+    showSlug?: boolean
+}
 
+function normalizeSlug(value?: string | null) {
+    if (typeof value !== "string") return null
+    const trimmed = value.trim()
+    return trimmed.length ? trimmed : null
+}
 export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayProps) {
     const gradient = gradientForIssuer(
         (card as any)?.cardProductSlug,
@@ -19,10 +26,10 @@ export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayP
     const name = (card as any)?.productName ?? card.nickname ?? "Your Card";
     const last4 = (card.mask ?? "").slice(-4) || "0000";
 
+    // Use the helper so it isn’t “declared and never used”
     const slug =
-        (typeof (card as any)?.cardProductSlug === "string" && (card as any).cardProductSlug.trim()) ||
-        (typeof (card as any)?.productSlug === "string" && (card as any).productSlug.trim()) ||
-        null;
+        normalizeSlug((card as any)?.cardProductSlug) ||
+        normalizeSlug((card as any)?.productSlug)
 
     const justify = showSlug ? "justify-between" : "justify-start";
 
