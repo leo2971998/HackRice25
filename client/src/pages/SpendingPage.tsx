@@ -2,16 +2,15 @@ import { useEffect, useMemo, useState } from "react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useSpendDetails, useTransactions } from "@/hooks/useApi"
+import { useAccounts, useSpendDetails, useTransactions } from "@/hooks/useApi"
 
-// ---- Types aligned to your APIs ----
 type Tx = {
     id?: string
     _id?: string
     date: string
     merchantName: string
     category?: string
-    amount: number     // USD from /api/transactions
+    amount: number
     status?: string
 }
 
@@ -23,7 +22,6 @@ type MerchantRow = {
     logoUrl?: string
 }
 
-// ---- Helpers ----
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
 const MERCHANT_OVERRIDES: Record<string, string> = {
@@ -54,25 +52,39 @@ export default function SpendingPage() {
     const [tab, setTab] = useState<"merchants" | "transactions">("merchants")
     const [windowDays, setWindowDays] = useState<number>(30)
 
-    // Shared page size for both tabs
-    const [pageSize, setPageSize] = useState<number>(10)
+    // NEW: card filter (single card or "all")
+    const accounts = useAccounts()
+    const cards = accounts.data ?? []
+    const [selectedCardId, setSelectedCardId] = useState<string>("all")
 
-    // Independent page indices per tab
+    // when cards load the first time, default to first card (or keep "all" if you prefer)
+    useEffect(() => {
+        if (cards.length && selectedCardId === "all") {
+            // if you want default = ALL, comment the next line:
+            setSelectedCardId(cards[0].id)
+        }
+    }, [cards]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const cardIdsParam = selectedCardId === "all" ? undefined : [selectedCardId]
+
+    const [pageSize, setPageSize] = useState<number>(10)
     const [merchantPage, setMerchantPage] = useState<number>(1)
     const [txPageIndex, setTxPageIndex] = useState<number>(1)
 
-    // Fetch from your working hooks
-    const { data: detailData, isLoading: merchantsLoading } = useSpendDetails(windowDays)
-    const { data: transactionsData, isLoading: txLoading } = useTransactions({ windowDays })
+    // reset pagination when filter changes
+    useEffect(() => {
+        setMerchantPage(1)
+        setTxPageIndex(1)
+    }, [selectedCardId, windowDays])
 
-    // ----- Merchants (server-grouped) -----
+    // Fetch with card filter
+    const { data: detailData, isLoading: merchantsLoading } = useSpendDetails(windowDays, { cardIds: cardIdsParam })
+    const { data: transactionsData, isLoading: txLoading } = useTransactions({ windowDays, cardIds: cardIdsParam })
+
+    // ----- Merchants -----
     const merchantsRaw: MerchantRow[] = detailData?.merchants ?? []
-    const merchants = useMemo(
-        () => [...merchantsRaw].sort((a, b) => b.amount - a.amount),
-        [merchantsRaw]
-    )
+    const merchants = useMemo(() => [...merchantsRaw].sort((a, b) => b.amount - a.amount), [merchantsRaw])
 
-    // Merchants pagination
     const merchTotal = merchants.length
     const merchTotalPages = Math.max(1, Math.ceil(merchTotal / pageSize))
     useEffect(() => setMerchantPage(1), [merchTotal, pageSize])
@@ -83,8 +95,6 @@ export default function SpendingPage() {
 
     // ----- Transactions -----
     const txsAll: Tx[] = (transactionsData?.transactions as Tx[]) ?? []
-
-    // Transactions pagination
     const txTotal = txsAll.length
     const txTotalPages = Math.max(1, Math.ceil(txTotal / pageSize))
     useEffect(() => setTxPageIndex(1), [txTotal, pageSize])
@@ -100,7 +110,22 @@ export default function SpendingPage() {
                 <h1 className="text-2xl font-semibold">Spending</h1>
 
                 <div className="flex items-center gap-2">
-                    {/* Window selector (feeds both hooks) */}
+                    {/* NEW: Card selector */}
+                    <Select value={selectedCardId} onValueChange={setSelectedCardId} disabled={accounts.isLoading}>
+                        <SelectTrigger className="w-[220px]">
+                            <SelectValue placeholder="Select card" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All cards</SelectItem>
+                            {cards.map((c) => (
+                                <SelectItem key={c.id} value={c.id}>
+                                    {c.nickname ?? c.issuer ?? "Card"} •••• {c.mask}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+
+                    {/* Window selector */}
                     <Select value={String(windowDays)} onValueChange={(v) => setWindowDays(Number(v))}>
                         <SelectTrigger className="w-[160px]">
                             <SelectValue placeholder="Window" />
@@ -136,9 +161,8 @@ export default function SpendingPage() {
                     <TabsTrigger value="transactions">Transactions</TabsTrigger>
                 </TabsList>
 
-                {/* Merchants tab (server data + pagination) */}
+                {/* Merchants tab */}
                 <TabsContent value="merchants" className="space-y-3">
-                    {/* Pager header */}
                     <div className="flex items-center justify-between gap-2">
                         <div className="text-sm opacity-80">
                             {merchTotal === 0 ? "No merchants" : `${merchStartIdx + 1}–${merchEndIdx} of ${merchTotal}`}
@@ -208,9 +232,8 @@ export default function SpendingPage() {
                     </div>
                 </TabsContent>
 
-                {/* Transactions tab with pagination */}
+                {/* Transactions tab */}
                 <TabsContent value="transactions" className="space-y-3">
-                    {/* Pager header */}
                     <div className="flex items-center justify-between gap-2">
                         <div className="text-sm opacity-80">
                             {txTotal === 0 ? "No transactions" : `${txStartIdx + 1}–${txEndIdx} of ${txTotal}`}
@@ -243,7 +266,7 @@ export default function SpendingPage() {
                             <thead className="bg-muted/50">
                             <tr>
                                 <th className="text-left p-3">Date</th>
-                                <th className="text-left p-3">Merchant</th>
+                                <th className="text-left p-3">Transaction</th>
                                 <th className="text-left p-3">Category</th>
                                 <th className="text-right p-3">Amount</th>
                                 <th className="text-right p-3">Status</th>
