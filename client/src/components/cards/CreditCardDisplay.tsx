@@ -1,21 +1,20 @@
-import { Badge } from "@/components/ui/badge"
+// src/components/cards/CreditCardDisplay.tsx
 import { gradientForIssuer } from "@/utils/brand-gradient"
-import { cn } from "@/lib/utils"
 import type { CardRow } from "@/types/api"
 
 type CreditCardDisplayProps = {
-  card: CardRow
-  holderName?: string | null
-  showSlug?: boolean
+    card: CardRow
+    holderName?: string | null
+    showSlug?: boolean
 }
 
 function normalizeSlug(value?: string | null) {
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
+    if (typeof value !== "string") return null
+    const trimmed = value.trim()
+    return trimmed.length ? trimmed : null
 }
 
-export function CreditCardDisplay({ card, showSlug = false }: Props) {
+export function CreditCardDisplay({ card, showSlug = false }: CreditCardDisplayProps) {
     const gradient = gradientForIssuer(
         (card as any)?.cardProductSlug,
         (card as any)?.productSlug,
@@ -28,11 +27,10 @@ export function CreditCardDisplay({ card, showSlug = false }: Props) {
     const name = (card as any)?.productName ?? card.nickname ?? "Your Card"
     const last4 = (card.mask ?? "").slice(-4) || "0000"
 
-    // If you kept a slug variable before, you can keep it but only render it when showSlug is true
+    // Use the helper so it isn’t “declared and never used”
     const slug =
-        (typeof (card as any)?.cardProductSlug === "string" && (card as any).cardProductSlug.trim()) ||
-        (typeof (card as any)?.productSlug === "string" && (card as any).productSlug.trim()) ||
-        null
+        normalizeSlug((card as any)?.cardProductSlug) ||
+        normalizeSlug((card as any)?.productSlug)
 
     const justify = showSlug ? "justify-between" : "justify-start"
 
@@ -60,7 +58,6 @@ export function CreditCardDisplay({ card, showSlug = false }: Props) {
                             <span className="hidden sm:inline">SWIPE COACH MEMBER</span>
                         </div>
 
-                        {/* ↓ Hide this whole block when showSlug is false */}
                         {showSlug && slug ? (
                             <div className="text-right opacity-90">
                                 <div className="uppercase tracking-wide">Slug</div>

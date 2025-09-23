@@ -1,3 +1,4 @@
+// src/hooks/useBestCard.ts
 import { useState } from "react"
 import { apiFetch } from "@/lib/api-client"
 
@@ -20,7 +21,8 @@ export function useBestCard() {
         try {
             const res = await apiFetch<{ candidates: BestCardCandidate[] }>("/cards/best", {
                 method: "POST",
-                body: params,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(params),
             })
             setData(res)
         } catch (e: any) {

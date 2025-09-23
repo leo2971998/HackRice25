@@ -1,4 +1,4 @@
-// src/components/ui/label.tsx
+// src/components/ui/label
 import * as React from "react";
 import { cn } from "@/lib/utils";
 

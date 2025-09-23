@@ -34,7 +34,6 @@ export function BudgetCard({ cardIds }: { cardIds?: string[] }) {
     // pacing
     const projected = mtdDays > 0 ? (spendMTD / mtdDays) * dim : 0
     const limit = prefs.monthly_limit ?? 0
-    const pct = limit > 0 ? Math.min(1, spendMTD / limit) : 0
     const over = limit > 0 && projected > limit
     const safePerDay = limit > 0 ? Math.max(0, (limit - spendMTD) / (dim - mtdDays || 1)) : 0
 

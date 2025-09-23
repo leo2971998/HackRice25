@@ -2,3 +2,6 @@
 /.vite
 /.idea
 /server/venv
+client/.firebase/hosting.ZGlzdA.cache
+client/.firebaserc
+client/firebase.json

@@ -209,7 +209,7 @@ export default function CardsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardRowType | null>(null);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(
+  const [, setSelectedScenarioId] = useState<string | null>(
     null
   );
 
@@ -238,11 +238,6 @@ export default function CardsPage() {
       return scenarios[0].id;
     });
   }, [cardDetails.data?.id, scenarioCount]);
-
-  const scenarioList = cardDetails.data?.cashbackScenarios ?? [];
-  const selectedScenario =
-    scenarioList.find((scenario) => scenario.id === selectedScenarioId) ??
-    (scenarioList.length ? scenarioList[0] : null);
 
   const effectiveLabel = rewardsEstimate.data
     ? `${percent1.format(rewardsEstimate.data.effectiveRate)} effective`

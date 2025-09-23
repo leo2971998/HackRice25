@@ -52,13 +52,6 @@ function formatLastSynced(card: CardRow) {
 const DETAILS_WINDOW_DAYS = 30
 
 /* ───────── helpers ───────── */
-
-function normalizeSlug(value?: string | null) {
-    if (typeof value !== "string") return null
-    const t = value.trim()
-    return t.length ? t : null
-}
-
 function gradientForCardRow(card?: Partial<CardRow>) {
     const hints: (string | null | undefined)[] = [
         card?.cardProductId,
@@ -589,14 +582,14 @@ export function HomePage() {
 
                             {/* Compact stats strip (no 30-day spend here now) */}
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                <StatTile label="Transactions (30d)" value={summary.data ? summary.data.stats.txns.toLocaleString() : "0"} />
-                                <StatTile label="Active cards" value={summary.data ? String(summary.data.stats.accounts) : "0"} />
+                                <StatTile label="Transactions (30d)" value={stats.txns.toLocaleString()} />
+                                <StatTile label="Active cards" value={String(stats.accounts)} />
                             </div>
 
                             <CategoryMomentumCard txs={(txQuery.data?.transactions ?? []).map(t => ({
-                                date: t.date,
-                                category: t.category,
-                                amount: t.amount,
+                                 date: t.date ?? "",
+                            category: t.category,
+                            amount: t.amount,
                             }))} />
                         </div>
 
@@ -604,7 +597,7 @@ export function HomePage() {
                         <div className="lg:col-span-5 space-y-6">
                             <BudgetProgressCard monthSpend={mtdSpend} monthlyBudget={monthlyBudget} />
 
-                            <Rolling30WideCard value={summary.data ? summary.data.stats.totalSpend : 0} />
+                            <Rolling30WideCard value={stats.totalSpend} />
 
                             <Card className="rounded-3xl">
                                 <CardHeader className="p-5 pb-0">
